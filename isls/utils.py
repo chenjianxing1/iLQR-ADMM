@@ -3,6 +3,66 @@ import scipy
 from scipy.linalg import block_diag, null_space
 import scipy.sparse as sp
 from scipy.special import factorial
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import matplotlib.patches as mpatches
+
+def plot_robot(xs, color='k', xlim=None, ax=None, ylim=None, robot_base=False,**kwargs):
+    if not ax:
+        l = plt.plot(xs[:, 0], xs[:, 1], marker='o', color=color, lw=10, mfc='w', solid_capstyle='round',
+                     **kwargs)
+
+        plt.gca().set_aspect('equal')
+
+        if xlim is not None: plt.xlim(xlim)
+        if ylim is not None: plt.ylim(ylim)
+    else:
+        l = ax.plot(xs[:, 0], xs[:, 1], color=color,marker='o', mec="k", mfc="w", lw=10, solid_capstyle='round',
+                    **kwargs)
+        if robot_base:
+            plot_robot_base(xs[0], ax, ec="k", fc="k", sz=0.1, alpha=0.8, zorder=1)
+
+        ax.set_aspect('equal')
+
+        if xlim is not None: ax.set_xlim(xlim)
+        if ylim is not None: ax.set_ylim(ylim)
+
+
+
+    return l
+
+def plot_robot_base(p1, ax,ec="k",fc="blue", sz=1.2, alpha=1., **kwargs):
+    nbSegm = 30
+    sz = sz * 1.2
+    t1 = np.linspace(0, np.pi, nbSegm - 2)
+    xTmp = np.zeros((2, nbSegm)) # 2D only
+    xTmp[0, 0] = sz * 1.5
+    xTmp[0, 1:-1] = sz * 1.5 * np.cos(t1)
+    xTmp[0, -1] = -sz * 1.5
+
+    xTmp[1, 0] = -sz * 1.2
+    xTmp[1, 1:-1] = sz * 1.5 * np.sin(t1)
+    xTmp[1, -1] = -sz * 1.2
+
+    x = xTmp + np.tile(p1[:,None], (1, nbSegm))
+    patch = mpatches.Polygon(x.T[:,:2], ec=ec, fc=fc, alpha=alpha, lw=3, **kwargs)
+    ax.add_patch(patch)
+
+    nb_line = 4
+    mult = 1.2
+    xTmp2 = np.zeros((2, nb_line))  # 2D only
+    xTmp2[0,:] = np.linspace(-sz * mult, sz * mult, nb_line)
+    xTmp2[1,:] = [-sz * mult] * nb_line
+
+    x2 = xTmp2 + np.tile((p1 + np.array([0.04,0.05]))[:,None], (1, nb_line))
+    x3 = xTmp2 + np.tile((p1 + np.array([-0.5, -1])*sz)[:,None], (1, nb_line))
+
+    for i in range(nb_line):
+        tmp = np.zeros((2, 2)) # N*2
+        tmp[0] = [x2[0,i], x2[1,i]]
+        tmp[1] = [x3[0, i], x3[1, i]]
+        patch = Line2D(tmp[:,0], tmp[:, 1],  color=ec, alpha=alpha, lw=2)
+        ax.add_line(patch)
 
 def nullspace_matrix(J):
     if type(J) != np.ndarray:

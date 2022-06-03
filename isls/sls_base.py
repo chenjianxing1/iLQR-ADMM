@@ -63,35 +63,57 @@ class SLSBase(object):
         self.zs = zs
         self.Qs = Qs
         self.seq = seq
-        self.Rt = np.eye(self.u_dim) * 10 ** (u_std)
+        self.Rt = np.eye(self.u_dim) * u_std
         self.Q = find_precs(Qs, seq, sqrt=False).astype(self.dtype)
         self.xd = find_mus(zs, seq).astype(self.dtype)
-        self.u_std = u_std
-        self.R = sp.csc_matrix(sp.block_diag([sp.eye(self.u_dim) * 10 ** (u_std)] * self.N)).astype(self.dtype)
+        self.R = sp.csc_matrix(sp.block_diag([sp.eye(self.u_dim) * u_std] * self.N)).astype(self.dtype)
 
 
-    def cost(self, x, u=None):
-
-        if len(x.shape) == 3: # batch solutions
-            x = x.reshape(x.shape[0], -1)
-        else:
-            x = x.reshape(1, -1)
-        dx = x - self.xd
-        cost_ = np.sum((dx @ self.Q) * dx, axis=-1)
-        if u is not None:
-            if len(u.shape) == 3:
-                u = u.reshape(u.shape[0], -1)
+    def compute_cost(self, x, u=None, cost_function=None):
+        if cost_function is None:
+            if len(x.shape) == 3: # batch solutions
+                x = x.reshape(x.shape[0], -1)
             else:
-                u = u.reshape(1, -1)
-            cost_ += np.sum((u @ self.R) * u, axis=-1)
-        if cost_.shape[0] == 1:
-            return cost_[0]
+                x = x.reshape(1, -1)
+            dx = x - self.xd
+            cost_ = np.sum((dx @ self.Q) * dx, axis=-1)
+            if u is not None:
+                if len(u.shape) == 3:
+                    u = u.reshape(u.shape[0], -1)
+                else:
+                    u = u.reshape(1, -1)
+                cost_ += np.sum((u @ self.R) * u, axis=-1)
+            if cost_.shape[0] == 1:
+                return cost_[0]
+            else:
+                return cost_
         else:
-            return cost_
+            return cost_function(x=x, u=u)
+
+    @property
+    def AB(self):
+        """
+        Returns: A list of A and B matrices
+        """
+        return [self.A, self.B]
+
+    @AB.setter
+    def AB(self, value):
+        """
+        Sets or updates the values of A, B, C and D matrices. We define $C = (I-ZA_d)^{-1}$ and $D = CZB_d$
+        Args:
+            value: a list of A and B [A,B]
+        """
+        self.A, self.B = value[0], value[1]
+        for i in range(self.N - 1, 0, -1):
+            self.D[i * self.x_dim:, (i - 1) * self.u_dim:i * self.u_dim] = \
+                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ self.B
+
+            self.C[i * self.x_dim:, (i - 1) * self.x_dim:i * self.x_dim] = \
+                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ self.A
 
 
-
-    def forward(self, x, u):
+    def forward_model(self, x, u):
         if x.ndim >= 2:
             return x.dot(self.A.T) + u.dot(self.B.T)
         else:

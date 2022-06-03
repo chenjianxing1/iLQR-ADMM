@@ -68,7 +68,7 @@ def ADMM(dim_x, dim_u, f_argmin, list_of_proj_x=[], list_of_proj_u=[],z_x_init=N
                 print("Residual change is ", "{:.2e}".format(prim_change), "{:.2e}".format(dual_change))
                 break
         if j == max_iter - 1:
-            print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
+            print("Residuals-> primal:", "{:.2e}".format(prim_res_norm), "dual:","{:.2e}".format(dual_res_norm))
             print("Max iteration reached.")
     if log:
         return x_u,  logs, *add_params

@@ -12,27 +12,7 @@ class SLS(SLSBase):
         """
         super().__init__(x_dim, u_dim, N, dtype=dtype)
 
-    @property
-    def AB(self):
-        """
-        Returns: A list of A and B matrices
-        """
-        return [self.A, self.B]
 
-    @AB.setter
-    def AB(self, value):
-        """
-        Sets or updates the values of A, B, C and D matrices. We define $C = (I-ZA_d)^{-1}$ and $D = CZB_d$
-        Args:
-            value: a list of A and B [A,B]
-        """
-        self.A, self.B = value[0], value[1]
-        for i in range(self.N - 1, 0, -1):
-            self.D[i * self.x_dim:, (i - 1) * self.u_dim:i * self.u_dim] = \
-                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim].dot(self.B)
-
-            self.C[i * self.x_dim:, (i - 1) * self.x_dim:i * self.x_dim] = \
-                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim].dot(self.A)
 
 
     def solve(self, verbose=False):

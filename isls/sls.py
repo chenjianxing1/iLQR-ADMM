@@ -15,50 +15,43 @@ class SLS(SLSBase):
 
 
 
-    def solve(self, verbose=False):
-        """
-        Solving System Level Synthesis problem.
-        """
-        assert self.A is not None, "Set the linear dynamics model by self.AB = [A,B] before calling this method."
-        assert self.Q is not None, "Set the quadratic cost model by self.set_cost_variables() before calling this method."
-
-        if type(self.Q) == sp.csc.csc_matrix:
-            self.Q = self.Q.toarray()
-
-        DTQ = self.D.T @ self.Q
-
-        if self.l_side_invs is None:
-            self.l_side_invs = self.compute_inverses(np.array(DTQ @ self.D + self.R))
-
-        self.du = self.l_side_invs[0] @ DTQ @ self.xd
-        self.dx = self.D @ self.du
-
-        if verbose: print("Feedforward computed.")
-        r_side = - DTQ @ self.C
-        for i in range(self.N):
-            if verbose: print("Computing feedback timestep ", i)
-            phi_u = self.l_side_invs[i] @ r_side[i * self.u_dim:, i * self.x_dim:(i + 1) * self.x_dim]
-            self.PHI_U[i * self.u_dim:, i * self.x_dim:(i + 1) * self.x_dim] = phi_u
-
-        self.PHI_X = self.C + self.D @ self.PHI_U
-        if verbose: print("Feedback computed.")
-
-    def controller(self):
+    def controller(self, PHI_U, du):
         """
         Computes the feedback gains K and the feedforward control commands k.
         """
-        assert self.PHI_X is not None, "Run self.solve() before calling this method."
-
-        K = np.array(self.PHI_U @ np.linalg.inv(self.PHI_X))
-        k = (np.eye(self.D.shape[-1]) - K @ self.D) @ self.du
+        PHI_X = self.C + self.D @ PHI_U
+        K = PHI_U @ np.linalg.inv(PHI_X)
+        k = (np.eye(self.D.shape[-1]) - K @ self.D) @ du
         return K, k
-
 
     def initialize_replanning_procedure(self, K ):
         self.replan_matrix = (np.eye(self.D.shape[-1]) - K @ self.D)@np.linalg.solve(self.D.T @ self.Q @ self.D + self.R, self.D.T @ self.Q)
 
     def replan_feedforward(self, k, xd):
         return k + self.replan_matrix.dot(xd - self.xd)
+
+    def solve_batch(self, x0):
+        """
+        Computes
+
+        Parameters
+        ----------
+        x0: initial state
+
+        Returns
+        -------
+        x_opt, u_opt: optimal values for tbe state and the control
+        """
+        if type(self.Q) == sp.csc.csc_matrix:
+            self.Q = self.Q.toarray()
+
+        if self.l_side_invs is None:
+            self.l_side_invs = self.compute_inverses(np.array(self.D.T @ self.Q @ self.D + self.R))
+
+        C_x0 = self.C[:, :self.x_dim] @ x0
+        u_opt = self.l_side_invs[0] @ self.D.T @ (self.Q @ self.xd - C_x0)
+        x_opt = C_x0 + self.D @ u_opt
+        return x_opt.reshape(self.N, -1), u_opt.reshape(self.N, -1)
 
     def solve_DP(self):
         """
@@ -119,6 +112,36 @@ class SLS(SLSBase):
             v = qx + Qux.T.dot(kt) + Kt.T.dot(qu) + Kt.T.dot(Quu).dot(kt)
 
         return K, k
+
+    def solve_sls(self, verbose=False):
+        """
+        Solving System Level Synthesis problem.
+        """
+        assert self.A is not None, "Set the linear dynamics model by self.AB = [A,B] before calling this method."
+        assert self.Q is not None, "Set the quadratic cost model by self.set_cost_variables() before calling this method."
+        PHI_U = np.zeros((self.N * self.u_dim, self.N * self.x_dim))
+
+        if type(self.Q) == sp.csc.csc_matrix:
+            self.Q = self.Q.toarray()
+
+        DTQ = self.D.T @ self.Q
+
+        if self.l_side_invs is None:
+            self.l_side_invs = self.compute_inverses(np.array(DTQ @ self.D + self.R))
+
+        du = self.l_side_invs[0] @ DTQ @ self.xd
+        # self.dx = self.D @ self.du
+
+        if verbose: print("Feedforward computed.")
+        r_side = - DTQ @ self.C
+        for i in range(self.N):
+            if verbose: print("Computing feedback timestep ", i)
+            phi_u = self.l_side_invs[i] @ r_side[i * self.u_dim:, i * self.x_dim:(i + 1) * self.x_dim]
+            PHI_U[i * self.u_dim:, i * self.x_dim:(i + 1) * self.x_dim] = phi_u
+
+        # self.PHI_X = self.C + self.D @ self.PHI_U
+        if verbose: print("Feedback computed.")
+        return PHI_U, du
 
 
     #################################### Inequalities ######################################
@@ -265,7 +288,8 @@ class SLS(SLSBase):
         l_side_invs = self.compute_inverses(l_side_fb)
         AA_inv = l_side_invs[0]
 
-        self.solve()
+        PHI_U, du = self.solve_sls()
+
         # Init ADMM
         if log: logs = []
 
@@ -273,14 +297,22 @@ class SLS(SLSBase):
         dim_u = (self.u_dim*self.N, self.x_dim//2+1) # shape[1] is self.x_dim+1 because we have robustness only wrt x0 position
         z_x = np.zeros(dim_x)
         z_u = np.zeros(dim_u)
+
+
+        z_u[:, 1:] = PHI_U[:, :self.x_dim//2]
+        z_u[:, 0] = du
+        z_x[:, 1:] = (self.C + self.D @ PHI_U)[:, :self.x_dim//2]
+        z_x[:, 0] = self.D @ du
+
+
         lmb_x = 0
         lmb_u = 0
 
         x_x_tilde = np.zeros(dim_x)
         x_u_tilde = np.zeros(dim_u)
 
-        x_x = 0.
-        x_u = 0.
+        x_x = z_x
+        x_u = z_u
 
         prim_res_norm = 1e6
         dual_res_norm = 1e6
@@ -310,8 +342,8 @@ class SLS(SLSBase):
             z_x_ = alpha * x_x + (1 - alpha) * z_x
             z_u_ = alpha * x_u + (1 - alpha) * z_u
 
-            z_x = project_set_convex(z_x_  + lmb_x , list_of_proj_x,max_iter=10, threshold=1e-3)
-            z_u = project_set_convex(z_u_  + lmb_u , list_of_proj_u,max_iter=10, threshold=1e-3)
+            z_x = project_set_convex(z_x_  + lmb_x , list_of_proj_x,max_iter=20, threshold=1e-4)
+            z_u = project_set_convex(z_u_  + lmb_u , list_of_proj_u,max_iter=20, threshold=1e-4)
 
             # Dual update
             prim_res_x = z_x_ - z_x
@@ -323,7 +355,7 @@ class SLS(SLSBase):
             prev_prim_res_norm = np.copy(prim_res_norm)
             prev_dual_res_norm = np.copy(dual_res_norm)
 
-            prim_res_norm = np.linalg.norm(prim_res_x) ** 2 + np.linalg.norm(prim_res_u) ** 2
+            prim_res_norm = np.linalg.norm(Qr@prim_res_x) ** 2 + np.linalg.norm(prim_res_u) ** 2
             dual_res_norm = np.linalg.norm(z_x - z_prev_x) ** 2 + np.linalg.norm(z_u - z_prev_u) ** 2
 
             if log: logs += [np.array([prim_res_norm,dual_res_norm])]
@@ -345,7 +377,7 @@ class SLS(SLSBase):
                 print("Max iteration reached.")
 
         du = x_u[:,0]
-        phi_u = np.concatenate([x_u[:,1:dim_u[1]], self.PHI_U[:, dim_u[1]-1:] ], axis=-1)
+        phi_u = np.concatenate([x_u[:,1:dim_u[1]], PHI_U[:, dim_u[1]-1:] ], axis=-1)
         if log:
             return du, phi_u, logs
         else:

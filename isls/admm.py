@@ -37,6 +37,9 @@ def ADMM(dim_x, dim_u, f_argmin, list_of_proj_x=[], list_of_proj_u=[],z_x_init=N
         z_x_ = alpha * x_x + (1 - alpha) * z_x
         z_u_ = alpha * x_u + (1 - alpha) * z_u
 
+        # z_x_ = x_x
+        # z_u_ = x_u
+
         z_x = project_set_convex(z_x_ + lmb_x , list_of_proj_x)
         z_u = project_set_convex(z_u_ + lmb_u , list_of_proj_u)
 

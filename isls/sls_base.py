@@ -76,13 +76,13 @@ class SLSBase(object):
             else:
                 x = x.reshape(1, -1)
             dx = x - self.xd
-            cost_ = np.sum((dx @ self.Q) * dx, axis=-1)
+            cost_ = np.sum(dx * (self.Q @ dx.T).T, axis=-1)
             if u is not None:
                 if len(u.shape) == 3:
                     u = u.reshape(u.shape[0], -1)
                 else:
                     u = u.reshape(1, -1)
-                cost_ += np.sum((u @ self.R) * u, axis=-1)
+                cost_ += np.sum(u * (self.R @ u.T).T, axis=-1)
             if cost_.shape[0] == 1:
                 return cost_[0]
             else:
@@ -120,36 +120,44 @@ class SLSBase(object):
             return self.A.dot(x) + self.B.dot(u)
 
     #################################### AT OPTIMALITY, RUN THESE ################################
-    def u_opt(self, x0):
-        return (self.PHI_U[:,:self.x_dim] @ x0 + self.du).reshape(self.N, -1)[:-1]
+    def u_optimal(self, x0, PHI_U, du):
+        return (PHI_U[:,:self.x_dim] @ x0 + du).reshape(self.N, -1)[:-1]
 
-    def x_opt(self, x0):
-        return (self.PHI_X[:, :self.x_dim] @ x0 + self.dx).reshape(self.N, -1)
+    def x_optimal(self, x0, PHI_X, dx):
+        return (PHI_X[:, :self.x_dim] @ x0 + dx).reshape(self.N, -1)
 
-    def get_state_trajectory_dp(self, x0, K, k):
-        x_log = np.zeros((self.N+1, self.x_dim))
-        x_log[0] = x0
+    def get_trajectory_batch(self, x0, us):
+        pass
+
+    def get_trajectory_dp(self, x0, K, k, noise_scale=0):
+        batch_size = x0.shape[0] if x0.ndim == 2 else 0
+        u_log = np.zeros((batch_size, self.N, self.u_dim))
+        x_log = np.zeros((batch_size, self.N+1, self.x_dim))
+        x_log[:, 0] = x0
         for i in range(self.N):
-            x_log[i+1] = self.forward(x_log[i],  K[i].dot(x_log[i]) + k[i])
-        return x_log[:-1]
+            u_log[:, i] = x_log[:, i].dot(K[i].T) + k[i]
+            w = np.random.normal(loc=0, scale=noise_scale, size=x0.shape)
+            x_log[:, i+1] = self.forward_model(x_log[:, i], u_log[:, i]) + w
+        if batch_size == 0:
+            return x_log[0, :-1], u_log[0]
+        else:
+            return x_log[:, :-1], u_log
 
-    def get_control_trajectory_dp(self, x0, K, k):
-        u_log = np.zeros((self.N, self.u_dim))
-        x_ = np.copy(x0)
+    def get_trajectory_sls(self, x0, K, k, noise_scale=0):
+        batch_size = x0.shape[0] if x0.ndim == 2 else 0
+        u_log = np.zeros((batch_size, self.N, self.u_dim))
+        x_log = np.zeros((batch_size, self.N+1, self.x_dim))
+        x_log[:, 0] = x0
+        x_vec = np.zeros((batch_size, self.N * self.x_dim))
         for i in range(self.N):
-            u_log[i] = K[i].dot(x_) + k[i]
-            x_ = self.forward(x_, u_log[i])
-        return u_log
-
-    def get_trajectory_dp(self, x0, K, k):
-        u_log = np.zeros((self.N, self.u_dim))
-        x_log = np.zeros((self.N+1, self.x_dim))
-        x_log[0] = x0
-        for i in range(self.N):
-            u_log[i] = K[i].dot(x_log[i]) + k[i]
-            x_log[i+1] = self.forward(x_log[i], u_log[i])
-        return x_log[:-1], u_log
-
+            x_vec[:, i * self.x_dim:(i + 1) * self.x_dim] = x_log[:, i]
+            u_log[:, i] = (x_vec @ K.T + k)[:, i * self.u_dim:(i + 1) * self.u_dim]
+            w = np.random.normal(loc=0, scale=noise_scale, size=x0.shape)
+            x_log[:, i+1] = self.forward_model(x_log[:, i], u_log[:, i]) + w
+        if batch_size == 0:
+            return x_log[0, :-1], u_log[0]
+        else:
+            return x_log[:, :-1], u_log
 
     ##################################### Setters and Getters #####################################
 

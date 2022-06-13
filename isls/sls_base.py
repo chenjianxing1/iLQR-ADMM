@@ -2,6 +2,7 @@ import numpy as np
 from .utils import find_precs, find_mus
 import scipy.sparse as sp
 import matplotlib.pyplot as plt
+import scipy
 
 class SLSBase(object):
     def __init__(self, x_dim, u_dim, N, dtype=np.float64):
@@ -130,7 +131,7 @@ class SLSBase(object):
         pass
 
     def get_trajectory_dp(self, x0, K, k, noise_scale=0):
-        batch_size = x0.shape[0] if x0.ndim == 2 else 0
+        batch_size = x0.shape[0] if x0.ndim == 2 else 1
         u_log = np.zeros((batch_size, self.N, self.u_dim))
         x_log = np.zeros((batch_size, self.N+1, self.x_dim))
         x_log[:, 0] = x0
@@ -139,6 +140,7 @@ class SLSBase(object):
             w = np.random.normal(loc=0, scale=noise_scale, size=x0.shape)
             x_log[:, i+1] = self.forward_model(x_log[:, i], u_log[:, i]) + w
         if batch_size == 0:
+            print(x_log.shape, u_log.shape)
             return x_log[0, :-1], u_log[0]
         else:
             return x_log[:, :-1], u_log
@@ -158,6 +160,32 @@ class SLSBase(object):
             return x_log[0, :-1], u_log[0]
         else:
             return x_log[:, :-1], u_log
+
+    def compute_Rr_Qr(self, rho_x, rho_u, dp=True):
+        if rho_x is None:
+            Qr = None
+        else:
+            if type(rho_x) == float or type(rho_x) == int:
+                Qr = np.tile(rho_x * np.eye(self.x_dim)[None], (self.N, 1, 1))
+            elif rho_x.shape[0] == self.x_dim:
+                Qr = np.zeros((self.N, self.d, self.d))
+                Qr[:] = rho_x
+            else:
+                Qr = rho_x
+            if not dp:
+                Qr = scipy.linalg.block_diag(*Qr)
+        if rho_u is None:
+            Rr = None
+        else:
+            if type(rho_u) == float or type(rho_x) == int:
+                Rr = [rho_u * np.eye(self.u_dim)]*self.N
+            elif rho_u.shape[0] == self.u_dim:
+                Rr = [rho_u] * self.N
+            else:
+                Rr = rho_u
+            if not dp:
+                Rr = scipy.linalg.block_diag(*Rr)
+        return Qr, Rr
 
     ##################################### Setters and Getters #####################################
 
@@ -199,6 +227,7 @@ class SLSBase(object):
         self.PHI_X = None
         self.du = None
         self.dx = None
+
 
     ############################################### PLOTTING ################################################
     def plot_phi_x(self):

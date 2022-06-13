@@ -56,7 +56,7 @@ def project_multilinear(x,A,l,u):
     return x - A.T@mu
 
 
-def project_set_convex(x, list_of_proj, max_iter=50, threshold=1e-5, verbose=False):
+def project_set_convex(x, list_of_proj, max_iter=10, threshold=1e-5, verbose=False):
     """
     Projects onto the intersection of a set of convex functions.
     list_of_proj contains the projection functions in the form f(x), i.e.,
@@ -121,18 +121,19 @@ def project_quadratic(x,l,u):
     if x.ndim == 2:
         return project_quadratic_batch(x, l, u)
     else:
-        val = 0.5 * (x.T.dot(x))
-
-        if val > u:
-            z =  x * np.sqrt(2 * u)/ np.linalg.norm(x)
-            zs = [z, -z]
-            return zs[np.argmin([np.linalg.norm(z-x), np.linalg.norm(-z-x)])]
-        elif l > val:
-            z = x * np.sqrt(2 * l) / np.linalg.norm(x)
-            zs = [z, -z]
-            return zs[np.argmin([np.linalg.norm(z - x), np.linalg.norm(-z - x)])]
-        else:
-            return  x
+        raise NotImplementedError
+        # val = 0.5 * (x.T.dot(x))
+        #
+        # if val > u:
+        #     z =  x * np.sqrt(2 * u)/ np.linalg.norm(x)
+        #     zs = [z, -z]
+        #     return zs[np.argmin([np.linalg.norm(z-x), np.linalg.norm(-z-x)])]
+        # elif l > val:
+        #     z = x * np.sqrt(2 * l) / np.linalg.norm(x)
+        #     zs = [z, -z]
+        #     return zs[np.argmin([np.linalg.norm(z - x), np.linalg.norm(-z - x)])]
+        # else:
+        #     return  x
 
 def project_quadratic_batch(x,l,u):
     """
@@ -144,12 +145,10 @@ def project_quadratic_batch(x,l,u):
     cond2 = np.where(l > val)
     x_norm  = np.linalg.norm(x, axis=-1)
 
-    cond_close = np.where(x_norm<1e-3)
-    x[cond_close] += np.random.normal(scale=1e-3,size=x[cond_close].shape)
-
+    # cond_close = np.where(x_norm<1e-1)
+    # x[cond_close] += np.random.normal(scale=1e-2,size=x[cond_close].shape)
     z[cond1] = x[cond1] * np.sqrt(2 * u)/ x_norm[cond1,None]
-    z[cond2] = x[cond2] * np.sqrt(2 * l) / x_norm[cond2,None]
-    # print(z)
+    z[cond2] = x[cond2] * np.sqrt(2 * l)/ x_norm[cond2,None]
     return z
 
 def project_quadratic_b(x, b, l, u):
@@ -216,10 +215,12 @@ def project_soc_batch(x, A, b, c, d):
 
     z = x @ A.T + b
     t = x @ c.T + d
-
     z_, t_ = project_soc_unit(z, t)
     proj = np.concatenate([z_, t_[:,None]], axis=1)
-    return scipy.linalg.lstsq(A_, proj.T-b_[:,None])[0].T
+
+    # return scipy.linalg.lstsq(A_, proj.T-b_[:,None])[0].T
+    A_inv = np.linalg.inv(A_.T@A_ + np.eye(A_.shape[-1])*1e0)
+    return np.einsum('ij,tj->ti',A_inv,(proj-b_[None]).dot(A_) + x*1e0   )
 
 
 def project_soc_unit(z,t):

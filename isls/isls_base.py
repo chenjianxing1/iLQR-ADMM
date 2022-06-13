@@ -8,10 +8,12 @@ class iSLSBase(SLS):
         self._cost_function = None
 
         nb_max_iterations_line_search = 50
-        self.alphas = np.zeros((nb_max_iterations_line_search,))
-        self.alphas[0] = 1.
-        for i in range(nb_max_iterations_line_search - 1):
-            self.alphas[i+1] = self.alphas[i] * 0.6
+        # self.alphas = np.zeros((nb_max_iterations_line_search,))
+        # self.alphas[0] = 1.
+        # for i in range(nb_max_iterations_line_search - 1):
+        #     self.alphas[i+1] = self.alphas[i] * 0.6
+
+        self.alphas = 10.**np.linspace(0, -3, nb_max_iterations_line_search)
 
         self._cost = None
         self._cur_decrease_cost = 1e5
@@ -127,6 +129,8 @@ class iSLSBase(SLS):
         self._k = None
 
         self.cost_log = []
+
+        # self.cost_function
 
 
 

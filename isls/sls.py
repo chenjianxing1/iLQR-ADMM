@@ -15,21 +15,6 @@ class SLS(SLSBase):
 
 
 
-    def controller(self, PHI_U, du):
-        """
-        Computes the feedback gains K and the feedforward control commands k.
-        """
-        PHI_X = self.C + self.D @ PHI_U
-        K = PHI_U @ np.linalg.inv(PHI_X)
-        k = (np.eye(self.D.shape[-1]) - K @ self.D) @ du
-        return K, k
-
-    def initialize_replanning_procedure(self, K ):
-        self.replan_matrix = (np.eye(self.D.shape[-1]) - K @ self.D)@np.linalg.solve(self.D.T @ self.Q @ self.D + self.R, self.D.T @ self.Q)
-
-    def replan_feedforward(self, k, xd):
-        return k + self.replan_matrix.dot(xd - self.xd)
-
     def solve_batch(self, x0):
         """
         Computes
@@ -53,7 +38,7 @@ class SLS(SLSBase):
         x_opt = C_x0 + self.D @ u_opt
         return x_opt.reshape(self.N, -1), u_opt.reshape(self.N, -1)
 
-    def solve_DP(self):
+    def solve_DP(self, Qr=None, Rr=None, ur=None, xr=None, return_Qs=False):
         """
         Solving LQT problem with dynamic programming,
         assuming that there is no cost multiplying x and u -> Cux = 0
@@ -69,50 +54,110 @@ class SLS(SLSBase):
         K = np.zeros((self.N, self.u_dim, self.x_dim))
         k = np.zeros((self.N, self.u_dim))
 
-        dim = self.x_dim + self.u_dim
-        Ct = np.zeros((dim, dim))
-        ct = np.zeros(dim)
-        ft = np.zeros(self.x_dim)
-
         # Final timestep computations
         Q = self.Qs[self.seq[-1]]
         V = 2 * Q
         v = -2 * Q.dot(self.zs[self.seq[-1]])
+
+        if Qr is not None:
+            # Regularized problem for ADMM
+            assert xr is not None
+            xr_ = xr.reshape(self.N, -1)
+            V += 2 * Qr[-1]
+            v += -2 * Qr[-1].dot(xr_[-1])
+
+        if Rr is not None:
+            assert ur is not None
+            ur_ = ur.reshape(self.N, -1)
+
+        if return_Qs:
+            Quu_log = np.zeros((self.N, self.u_dim, self.u_dim))
+            Quu_inv_log = np.zeros((self.N, self.u_dim, self.u_dim))
+            Qux_log = np.zeros((self.N, self.u_dim, self.x_dim))
+
         for t in range(self.N - 2, -1, -1):
             Q = self.Qs[self.seq[t]]
 
-            Ct[:self.x_dim, :self.x_dim] = 2*Q
-            Ct[self.x_dim:, self.x_dim:] = 2*self.Rt
+            Cxx = 2*Q
+            Cuu = 2*self.Rt
+            Cux = 0.
 
-            ct[:self.x_dim] = -2*Q.dot(self.zs[self.seq[t]])
-            ct[self.x_dim:] = 0  # this part is nonzero in the case of regularized ADMM
+            cx = -2*Q.dot(self.zs[self.seq[t]])
+            cu = 0.
+
+            if Qr is not None:
+                Cxx += 2 * Qr[t]
+                cx  += - 2 * Qr[t].dot(xr_[t])
+            if Rr is not None:
+                Cuu += 2 * Rr[t]
+                cu  += - 2 * Rr[t].dot(ur_[t])
 
             A = self.A
             B = self.B
-            Ft = np.hstack([A, B])
 
-            FtV = Ft.T.dot(V)
-            Qt = Ct + FtV.dot(Ft)
-            qt = ct + FtV.dot(ft) + Ft.T.dot(v)
+            qx = cx + A.T.dot(v)
+            qu = cu + B.T.dot(v)
 
-            Quu = Qt[self.x_dim:, self.x_dim:]
-            Qux = Qt[self.x_dim:, :self.x_dim]
-            Qxx = Qt[:self.x_dim, :self.x_dim]
+            Qxx = Cxx + A.T.dot(V).dot(A)
+            Qux = Cux + B.T.dot(V).dot(A)
+            Quu = Cuu + B.T.dot(V).dot(B)
+
             Quu_inv = np.linalg.inv(Quu)
-
-            qx = qt[:self.x_dim]
-            qu = qt[self.x_dim:]
-
             Kt = -Quu_inv.dot(Qux)
             kt = -Quu_inv.dot(qu)
-            K[t] = Kt
-            k[t] = kt
 
             V = Qxx + Qux.T.dot(Kt) + Kt.T.dot(Qux) + Kt.T.dot(Quu).dot(Kt)
             v = qx + Qux.T.dot(kt) + Kt.T.dot(qu) + Kt.T.dot(Quu).dot(kt)
 
-        return K, k
+            K[t] = Kt
+            k[t] = kt
 
+            if return_Qs:
+                Quu_log[t] = Quu
+                Quu_inv_log[t] = Quu_inv
+                Qux_log[t] = Qux
+        if return_Qs:
+            return K, k, Quu_log, Quu_inv_log, Qux_log
+        else:
+            return K, k
+
+    def solve_DP_ff(self, K, Quu, Qux, Quu_inv, Qr=None, Rr=None, ur=None, xr=None):
+
+        k = np.zeros((self.N, self.u_dim))
+
+        # Final timestep computations
+        Q = self.Qs[self.seq[-1]]
+        v = -2 * Q.dot(self.zs[self.seq[-1]])
+
+        if Qr is not None:
+            # Regularized problem for ADMM
+            assert xr is not None
+            xr_ = xr.reshape(self.N, -1)
+            v += -2 * Qr[-1].dot(xr_[-1])
+
+        if Rr is not None:
+            assert ur is not None
+            ur_ = ur.reshape(self.N, -1)
+
+        for t in range(self.N - 2, -1, -1):
+            Q = self.Qs[self.seq[t]]
+            cx = -2 * Q.dot(self.zs[self.seq[t]])
+            cu = 0.
+
+            if Qr is not None:
+                cx += - 2 * Qr[t].dot(xr_[t])
+            if Rr is not None:
+                cu += - 2 * Rr[t].dot(ur_[t])
+
+            qx = cx + self.A.T.dot(v)
+            qu = cu + self.B.T.dot(v)
+            kt = -Quu_inv[t].dot(qu)
+            v = qx + Qux[t].T.dot(kt) + K[t].T.dot(qu) + K[t].T.dot(Quu[t]).dot(kt)
+            k[t] = kt
+
+        return k
+
+    ############################################### SLS ##############################################################
     def solve_sls(self, verbose=False):
         """
         Solving System Level Synthesis problem.
@@ -143,123 +188,80 @@ class SLS(SLSBase):
         if verbose: print("Feedback computed.")
         return PHI_U, du
 
+    def controller(self, PHI_U, du):
+        """
+        Computes the feedback gains K and the feedforward control commands k.
+        """
+        PHI_X = self.C + self.D @ PHI_U
+        K = PHI_U @ np.linalg.inv(PHI_X)
+        k = (np.eye(self.D.shape[-1]) - K @ self.D) @ du
+        return K, k
 
-    #################################### Inequalities ######################################
+    def initialize_replanning_procedure(self, K ):
+        self.replan_matrix = (np.eye(self.D.shape[-1]) - K @ self.D)@np.linalg.solve(self.D.T @ self.Q @ self.D + self.R, self.D.T @ self.Q)
 
-    def ADMM_LQT_Batch(self, x0, list_of_proj_x=[], list_of_proj_u=[], max_iter=20, rho_x=0., rho_u=0., alpha=1.,
-                       threshold=1e-3, warm_start=False, init_guess=None, verbose=False, log=False):
+    def replan_feedforward(self, k, xd):
+        return k + self.replan_matrix.dot(xd - self.xd)
+
+
+    ######################################### Inequalities #########################################################
+
+    def ADMM_LQT_Batch(self, x0, list_of_proj_x=[], list_of_proj_u=[], max_iter=20, rho_x=None, rho_u=None, alpha=1.,
+                       z_x_init=None, z_u_init=None,
+                       threshold=1e-3,  verbose=False, log=False):
         """
         Solves LQT-ADMM in batch form.
         x0: initial state
         """
 
-        if type(rho_x) == float:
-            Qr = np.kron(np.eye(self.N), np.eye(self.x_dim)*rho_x)
-        elif rho_x.shape[0] == self.x_dim:
-            Qr = np.kron(np.eye(self.N), rho_x)
-        else:
-            Qr = rho_x
-
+        Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
         # Initialize some values
-        I = np.eye(self.R.shape[0])
-
         DQ = self.D.T @ self.Q
-        DTD = self.D.T @ Qr @ self.D
         DQD = DQ @ self.D
-        T = np.linalg.inv(DQD + self.R + I * rho_u + DTD)
+        l_side = DQD + self.R
+        if Qr is not None:
+            l_side += self.D.T @ Qr @ self.D
+        if Rr is not None:
+            l_side += Rr
+        l_side_inv = np.array(np.linalg.inv(l_side))
+
+
         Sx_x0 = self.C[:, :self.x_dim] @ x0
-        q = DQ.dot(self.xd - Sx_x0) - self.D.T @ Qr @ Sx_x0
-        if warm_start:
-            if init_guess is None:
-                z_init = Sx_x0 + self.D @ np.linalg.solve(DQD + self.R, DQ.dot(self.xd - Sx_x0))
-            else:
-                z_init = init_guess
-        else:
-            z_init = None
+        r_side = DQ.dot(self.xd - Sx_x0)
+        if Qr is not None:
+            r_side +=  - self.D.T @ Qr @ Sx_x0
+
 
         def f_argmin(x, u):
-            u_hat = np.array(T.dot(q + rho_u * u + self.D.T @ Qr @ x))[0]
+            r_side_ = r_side.copy()
+            if Qr is not None: r_side_ += self.D.T @ Qr @ x
+            if Rr is not None: r_side_ += Rr @ u
+            u_hat = l_side_inv @ r_side_
             x_hat = Sx_x0 + self.D @ u_hat
             return x_hat, u_hat
 
         return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, list_of_proj_x, list_of_proj_u,alpha=alpha,
-                       z_x_init=z_init, max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
+                    z_x_init=z_x_init, z_u_init=z_u_init,
+                        max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
 
 
-    def ADMM_LQT_DP(self, x0, list_of_proj_x=[], list_of_proj_u=[], max_iter=2000,  rho_x=0., rho_u=0.,alpha=1.,
+    def ADMM_LQT_DP(self, x0, list_of_proj_x=[], list_of_proj_u=[], max_iter=2000, rho_x=None, rho_u=None,alpha=1.,
                     threshold=1e-3, verbose=False, log=False):
         """
         Solves LQT-ADMM with dynamic programming.
         """
 
-        if type(rho_x) == float:
-            Qr = np.tile(rho_x*np.eye(self.x_dim)[None], (self.N,1,1))
-        elif rho_x.shape[0] == self.x_dim:
-            Qr = np.tile(rho_x[None], (self.N,1,1))
-        else:
-            Qr = rho_x
+        Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=True)
+        K, _, Quu_log, Quu_inv_log, Qux_log = self.solve_DP(Rr=Rr, Qr=Qr,
+                                                                 xr=np.zeros(self.N * self.x_dim),
+                                                                 ur=np.zeros(self.N * self.u_dim), return_Qs=True)
 
-        Rr = rho_u*np.eye(self.u_dim)
-
-        dim = self.x_dim + self.u_dim
-        A = self.A
-        B = self.B
-        Ft = np.hstack([A, B])
-
-        # Compute static variables first (4 variables)
-        V = np.zeros((self.N, self.x_dim, self.x_dim))
-        Quu_inv = np.zeros((self.N, self.u_dim, self.u_dim))
-        Qts = np.zeros((self.N, dim, dim))
-        K = np.zeros((self.N, self.u_dim, self.x_dim))
-        var1 = np.zeros((self.N, self.x_dim, self.u_dim))
-        var2 = np.zeros((self.N, self.x_dim))
-
-        Ct = np.zeros((dim, dim))
-        Q = self.Qs[self.seq[-1]]
-        V[-1] = 2 * (Q + Qr[-1])
-        var2[-1] = -2 * self.Qs[self.seq[-1]].dot(self.zs[self.seq[-1]])
-        for t in range(self.N - 2, -1, -1):
-            Q = self.Qs[self.seq[t]]
-            Ct[:self.x_dim, :self.x_dim] = 2 * (Q + Qr[t])
-            Ct[self.x_dim:, self.x_dim:] = 2 * (self.Rt + Rr)
-
-            FtV = Ft.T.dot(V[t+1])
-            Qts[t] = Ct + FtV.dot(Ft)
-
-            Quu = Qts[t, self.x_dim:, self.x_dim:]
-            Qux = Qts[t, self.x_dim:, :self.x_dim]
-            Qxx = Qts[t, :self.x_dim, :self.x_dim]
-            Quu_inv[t] = np.linalg.inv(Quu)
-
-            K[t] = -Quu_inv[t].dot(Qux)
-            var1[t] = Qux.T + K[t].T.dot(Quu)
-            V[t] = Qxx + var1[t].dot(K[t]) + K[t].T.dot(Qux)
-            var2[t] = -2 * Q.dot(self.zs[self.seq[t]])
-
-        k = np.zeros((self.N, self.u_dim))
-        ct = np.zeros(dim)
-        u_log = np.zeros((self.N, self.u_dim))
-        x_log = np.zeros((self.N + 1, self.x_dim))
-        x_log[0] = x0
         def f_argmin(x, u):
-            xr = x.reshape(-1, self.x_dim)
-            ur = u.reshape(-1, self.u_dim)
+            k = self.solve_DP_ff(K=K, Quu=Quu_log, Quu_inv=Quu_inv_log, Qux=Qux_log,
+                                 Rr=Rr, Qr=Qr, xr=x, ur=u)
+            x_nom, u_nom = self.get_trajectory_dp(x0, K, k)
+            return x_nom.flatten(), u_nom.flatten(), K, k
 
-            v = var2[-1] - 2 * Qr[-1].dot(xr[-1])
-
-            for t in range(self.N - 2, -1, -1):
-                ct[:self.x_dim] = var2[t] - 2 * Qr[t].dot(xr[t])
-                ct[self.x_dim:] = -2 * Rr.dot(ur[t])
-
-                qt = ct + Ft.T.dot(v)
-
-                k[t] = -Quu_inv[t].dot(qt[self.x_dim:])
-                v = qt[:self.x_dim] + K[t].T.dot(qt[self.x_dim:]) + var1[t].dot(k[t])
-
-            for i in range(self.N):
-                u_log[i] = K[i].dot(x_log[i]) + k[i]
-                x_log[i + 1] = self.A.dot(x_log[i]) + self.B.dot( u_log[i])
-            return x_log[:-1].flatten(), u_log.flatten(), K, k
         return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, list_of_proj_x, list_of_proj_u, alpha=alpha,
                        max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
 
@@ -268,12 +270,7 @@ class SLS(SLSBase):
         Solves system level synthesis problem with ADMM.
         Robustness of control commands being in bounds with respect to a initial position distribution only.
         """
-        if type(rho_x) == float:
-            Qr = np.eye(self.x_dim * self.N) * rho_x
-        elif rho_x.shape[0] == self.x_dim:
-            Qr = np.kron(np.eye(self.N), rho_x)
-        else:
-            Qr = rho_x
+        Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
 
         # Initialize some values
         DTQ = self.D.T @ self.Q
@@ -304,36 +301,29 @@ class SLS(SLSBase):
         z_x[:, 1:] = (self.C + self.D @ PHI_U)[:, :self.x_dim//2]
         z_x[:, 0] = self.D @ du
 
-
         lmb_x = 0
         lmb_u = 0
 
-        x_x_tilde = np.zeros(dim_x)
-        x_u_tilde = np.zeros(dim_u)
-
-        x_x = z_x
-        x_u = z_u
+        x_x = z_x.copy()
+        x_u = z_u.copy()
 
         prim_res_norm = 1e6
         dual_res_norm = 1e6
         print("Start iterating..")
+
+        def f_argmin(x, u):
+            x_r = DTQr @ x
+            u_r = rho_u * u
+            x_u[:, 0] = AA_inv @ ( q_d + x_r[:,0] + u_r[:, 0])
+            x_x[:, 0] = self.D @ x_u[:, 0]
+            x_u[:, 1:] = np.matmul(AA_inv, r_side[:, :self.x_dim//2] + x_r[:, 1:] + u_r[:, 1:])
+            x_x[:, 1:] = self.C[:, :dim_x[1]-1] + self.D @ x_u[:, 1:]
+            return x_x, x_u
+
         for j in range(max_iter):
 
             ## First step
-            x_r = DTQr @ (z_x - lmb_x)
-            u_r = rho_u * (z_u - lmb_u)
-
-            # Optimize for feedforward terms
-            x_u_tilde[:, 0] = AA_inv @ ( q_d + x_r[:,0] + u_r[:, 0])
-            x_x_tilde[:, 0] = self.D @ x_u_tilde[:, 0]
-
-            # Optimize for feedback terms
-            # since we want robustness only wrt x0 ,we can only update the first block column.
-            x_u_tilde[:, 1:] = np.matmul(AA_inv, r_side[:, :self.x_dim//2] + x_r[:, 1:] + u_r[:, 1:])
-            x_x_tilde[:, 1:] = self.C[:, :dim_x[1]-1] + self.D @ x_u_tilde[:, 1:]
-
-            x_x = alpha * x_x_tilde + (1 - alpha) * x_x
-            x_u = alpha * x_u_tilde + (1 - alpha) * x_u
+            x_x, x_u = f_argmin(z_x - lmb_x, z_u - lmb_u)
 
             ## Projection step
             z_prev_x = z_x
@@ -342,8 +332,8 @@ class SLS(SLSBase):
             z_x_ = alpha * x_x + (1 - alpha) * z_x
             z_u_ = alpha * x_u + (1 - alpha) * z_u
 
-            z_x = project_set_convex(z_x_  + lmb_x , list_of_proj_x,max_iter=20, threshold=1e-4)
-            z_u = project_set_convex(z_u_  + lmb_u , list_of_proj_u,max_iter=20, threshold=1e-4)
+            z_x = project_set_convex(z_x_  + lmb_x , list_of_proj_x, threshold=1e-2)
+            z_u = project_set_convex(z_u_  + lmb_u , list_of_proj_u, threshold=1e-2)
 
             # Dual update
             prim_res_x = z_x_ - z_x
@@ -355,7 +345,7 @@ class SLS(SLSBase):
             prev_prim_res_norm = np.copy(prim_res_norm)
             prev_dual_res_norm = np.copy(dual_res_norm)
 
-            prim_res_norm = np.linalg.norm(Qr@prim_res_x) ** 2 + np.linalg.norm(prim_res_u) ** 2
+            prim_res_norm = np.linalg.norm(prim_res_x) ** 2 + np.linalg.norm(prim_res_u) ** 2
             dual_res_norm = np.linalg.norm(z_x - z_prev_x) ** 2 + np.linalg.norm(z_u - z_prev_u) ** 2
 
             if log: logs += [np.array([prim_res_norm,dual_res_norm])]

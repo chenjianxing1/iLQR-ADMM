@@ -11,6 +11,10 @@ with a chosen safety probability, while LQT-ADMM only satisfies the constraints 
 * Fast optimization for nonlinear systems
 ![3DoF Robot](images/3dof.png)
 
+**iLQR with control bounds for a 2D car model.**
+* Fast optimization for nonlinear systems
+<img src="https://github.com/hgirgin/iLQR-ADMM/images/animation.gif" width="40" height="40" />
+
 
 
 Dependencies:

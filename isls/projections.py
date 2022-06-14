@@ -12,15 +12,18 @@ def project_linear(x, a, l, u):
     """
     Projects the vector x such that l<= a.T @ x <= u
     """
-    aTx = a.dot(x)
-    aTa = a.dot(a) + 1e-30
-    if aTx > u:
-        mu = aTx - u
-    elif aTx < l:
-        mu = aTx - l
+    if x.ndim == 2:
+        return project_linear_batch(x, a, l, u)
     else:
-        mu = 0.
-    return x - mu*a/aTa
+        aTx = a.dot(x)
+        aTa = a.dot(a) + 1e-30
+        if aTx > u:
+            mu = aTx - u
+        elif aTx < l:
+            mu = aTx - l
+        else:
+            mu = 0.
+        return x - mu*a/aTa
 
 def project_linear_batch(x, a, l, u):
     """
@@ -56,7 +59,7 @@ def project_multilinear(x,A,l,u):
     return x - A.T@mu
 
 
-def project_set_convex(x, list_of_proj, max_iter=10, threshold=1e-5, verbose=False):
+def project_set_convex(x, list_of_proj, max_iter=20, threshold=1e-4, verbose=False):
     """
     Projects onto the intersection of a set of convex functions.
     list_of_proj contains the projection functions in the form f(x), i.e.,

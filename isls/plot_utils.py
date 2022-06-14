@@ -93,9 +93,8 @@ def twist(obj, x, y, theta=0):
         h.set_xy(np.stack([np.real(Z), np.imag(Z)]).T)
 
 
-def plot_car(x, u):
-    body = np.array([0.9, 2.1, 0.3])  # body = [width length curvature]
-    bodycolor = 0.7 * np.array([1, 1, 1])
+def plot_car(x, u, width=0.9, length=2.1, bodycolor=0.7 * np.array([1, 1, 1])):
+    body = np.array([width, length, 0.3])  # body = [width length curvature]
     headlights = np.array([0.25, 0.1, .1, body[0] / 2])  # headlights [width length curvature x]
     lightcolor = np.array([1, 1, 0])
     wheel = np.array([0.15, 0.4, .06, 1.1 * body[0], -1.1, .9])  # wheels = [width length curvature x yb yf]
@@ -105,7 +104,7 @@ def plot_car(x, u):
     for front in range(2):
         for right in [-1, 1]:
             h += [rrect(wheel, wheelcolor)]  ##ok<AGROW>
-            if front == 1:
+            if front == 0:
                 twist([h[-1]], 0, 0, u[0])
             twist([h[-1]], right * wheel[3], wheel[3 + front])
     # make body

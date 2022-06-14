@@ -14,8 +14,12 @@ with a chosen safety probability, while LQT-ADMM only satisfies the constraints 
 **iLQR with control bounds for a 2D car model.**
 * Fast optimization for nonlinear systems
 
-<img src="C:\Users\hakan\Codes\iLQR-ADMM\images\animation.gif" width="230"/>
-<img src="C:\Users\hakan\Codes\iLQR-ADMM\images\animation_state_bounds.gif" width="230"/>
+[comment]: <> (<img src="C:\Users\hakan\Codes\iLQR-ADMM\images\animation.gif" width="230"/>)
+
+[comment]: <> (<img src="C:\Users\hakan\Codes\iLQR-ADMM\images\animation_state_bounds.gif" width="230"/>)
+
+<img src="\images\animation.gif" width="230"/>
+<img src="\images\animation_state_bounds.gif" width="230"/>
 
 
 

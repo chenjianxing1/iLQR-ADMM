@@ -274,3 +274,11 @@ def get_double_integrator_AB(nb_dim, nb_deriv=2, dt=0.01):
         B1d[nb_deriv - i] = np.power(dt, i) / factorial(i)
 
     return np.kron(A1d, np.eye(nb_dim)), np.kron(B1d, np.eye(nb_dim))
+
+def run_once(f):
+    def wrapper(*args, **kwargs):
+        if not wrapper.has_run:
+            wrapper.has_run = True
+            return f(*args, **kwargs)
+    wrapper.has_run = False
+    return wrapper

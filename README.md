@@ -18,7 +18,23 @@ with a chosen safety probability, while LQT-ADMM only satisfies the constraints 
   <img src="images/animation_state_bounds.gif" width="49%" />
 </p>
 
-
+Guideline:  
+```
+    isls = iSLS(x_dim, u_dim, N)
+    if nonlinear dynamics:
+        f(x_{t}, u_{t}): returns x_{t+1} forward dynamics function
+        isls.forward_model = f
+        get_AB(x,u): returns A,B
+    else:
+        isls.AB = A,B
+    if nonquadratic cost:
+        isls.cost_function = cost
+        get_Cs()
+    else:
+        isls.set_cost_variables()
+        
+    isls.solve_ilqr() 
+```
 
 
 

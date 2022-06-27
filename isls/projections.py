@@ -2,6 +2,8 @@ import numpy as np
 import scipy
 from copy import deepcopy
 
+
+########## PRIMITIVE PROJECTIONS ###############
 def project_bound(x, l, u):
     """
     Projects the vector x between upper and lower bounds u and l such that l<=P(x)<=u
@@ -59,58 +61,6 @@ def project_multilinear(x,A,l,u):
     return x - A.T@mu
 
 
-def project_set_convex(x, list_of_proj, max_iter=20, threshold=1e-4, verbose=False):
-    """
-    Projects onto the intersection of a set of convex functions.
-    list_of_proj contains the projection functions in the form f(x), i.e.,
-    all the other parameters need to be already defined for simplicity.
-    """
-    prim_res_norm = 1e6
-    dual_res_norm = 1e6
-    z = 0.
-    nb_proj = len(list_of_proj)
-    if nb_proj == 0:
-        return x
-    elif nb_proj == 1:
-        return list_of_proj[0](x)
-    else:
-        x_p = np.repeat(x[np.newaxis], nb_proj, axis=0)
-        lmb = np.zeros_like(x_p)
-
-        for j in range(max_iter):
-            x_p_bar = np.mean(x_p, axis=0)
-            for i in range(nb_proj):
-                x_p[i] = list_of_proj[i](x_p_bar - lmb[i])
-            z_prev = deepcopy(z)
-            z = np.mean(x_p, axis=0)
-            prim_res = x_p - z
-            prev_prim_res_norm = np.copy(prim_res_norm)
-            prev_dual_res_norm = np.copy(dual_res_norm)
-            prim_res_norm = np.linalg.norm(prim_res)**2
-            dual_res_norm = np.linalg.norm(z - z_prev) ** 2
-
-            lmb += prim_res
-            if prim_res_norm < threshold and dual_res_norm < threshold:
-                if verbose:
-                    print("Converged at iteration ", j, "!")
-                    print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
-                break
-            else:
-                prim_change = np.abs(prev_prim_res_norm - prim_res_norm) / (prev_prim_res_norm + 1e-30)
-                dual_change = np.abs(prev_dual_res_norm - dual_res_norm) / (prev_dual_res_norm + 1e-30)
-                if prim_change < 1e-5 and dual_change < 1e-5:
-                    if verbose:
-                        print("Can't improve anymore at iteration ", j, "!")
-                        print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
-                        print("Residual change is ", "{:.2e}".format(prim_change), "{:.2e}".format(dual_change))
-                    break
-            if j == max_iter - 1:
-                if verbose:
-                    print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
-                    print("Max iteration reached.")
-        return z
-
-
 def project_affine(x, a, b, l, u):
     """
     Projects the vector x such that l<= a.T @ x + b <= u
@@ -143,15 +93,15 @@ def project_quadratic_batch(x,l,u):
     Batch version of project_quadratic, x is a matrix
     """
     z = x.copy()
-    val = 0.5 * np.sum(x * x, -1)
+    val = 0.5 * np.sum(x * x, axis=-1)
     cond1 = np.where(val > u)
     cond2 = np.where(l > val)
-    x_norm  = np.linalg.norm(x, axis=-1)
+    # x_norm  = np.linalg.norm(x, axis=-1)
 
-    # cond_close = np.where(x_norm<1e-1)
-    # x[cond_close] += np.random.normal(scale=1e-2,size=x[cond_close].shape)
-    z[cond1] = x[cond1] * np.sqrt(2 * u)/ x_norm[cond1,None]
-    z[cond2] = x[cond2] * np.sqrt(2 * l)/ x_norm[cond2,None]
+    # cond_close = np.where(x_norm<1e-3)
+    # x[cond_close] += np.random.normal(scale=1e-3,size=x[cond_close].shape)
+    z[cond1] = x[cond1] * np.sqrt(2 * u)/ np.linalg.norm(x[cond1], axis=-1)[:,None]
+    z[cond2] = x[cond2] * np.sqrt(2 * l)/ np.linalg.norm(x[cond2], axis=-1)[:,None]
     return z
 
 def project_quadratic_b(x, b, l, u):
@@ -165,105 +115,123 @@ def project_quadratic_b(x, b, l, u):
     return p_z - b
 
 
-def project_quadratic_A(x, A, l, u):
-    """
-    Projects the vector x such that l<= 0.5 * (x.T @ A @ x) <= u
-    A : positive definite matrix
-    """
-    L = np.linalg.cholesky(A).T
-    z = L @ x
-    p_z = project_quadratic(z, l, u)
-    return scipy.linalg.solve(L, p_z)
-
-def project_quadratic_Ab(x, A, b, l, u):
-    """
-    Projects the vector x such that l<= 0.5 * (x.T @ A @ x) + b.T @ x <= u
-    A : positive definite matrix
-    b : vector
-    """
-    L = np.linalg.cholesky(A).T
-    A_inv = np.linalg.inv(A)
-    A_inv_b = A_inv @ b
-    z = L @ (x +  A_inv_b)
-    const = 0.5 * b.T.dot(A_inv).dot(b)
-    p_z = project_quadratic(z, l + const, u + const )
-    return np.linalg.solve(L, p_z) - A_inv_b
-
-
-
-
-def project_soc(x, A, b, c, d):
-    """
-    Projects the vector x onto the second order cone (soc) such that ||Ax-b||<= c.Tx + d
-    """
-    if x.ndim == 2:
-        return project_soc_batch(x, A, b, c, d)
-    else:
-        A_ = np.concatenate([A, c[None]], 0)
-        b_ = np.append(b, d)
-
-        z = x @ A.T + b
-        t = c.T.dot(x) + d
-        z_, t_ = project_soc_unit(z, t)
-        proj = np.append(z_, t_)
-
-        return scipy.linalg.lstsq(A_, proj-b_)[0]
-
-def project_soc_batch(x, A, b, c, d):
-    """
-    Batch version of project_soc
-    """
-    A_ = np.concatenate([A, c[None]], 0)
-    b_ = np.append(b, d)
-
-    z = x @ A.T + b
-    t = x @ c.T + d
-    z_, t_ = project_soc_unit(z, t)
-    proj = np.concatenate([z_, t_[:,None]], axis=1)
-
-    # return scipy.linalg.lstsq(A_, proj.T-b_[:,None])[0].T
-    A_inv = np.linalg.inv(A_.T@A_ + np.eye(A_.shape[-1])*1e0)
-    return np.einsum('ij,tj->ti',A_inv,(proj-b_[None]).dot(A_) + x*1e0   )
-
-
-def project_soc_unit(z,t):
+def project_soc_unit(zt):
     """
     Projects the vector z and t onto the second order cone (soc) such that ||z||<= t
     """
+    z = zt[...,:-1]
+    t = zt[...,-1]
     if z.ndim == 2:
-        return project_soc_unit_batch(z, t)
+        z_, t_ = project_soc_unit_batch(z=z, t=t)
+        return np.concatenate([z_, t_[:, None]], axis=1)
+
     else:
-
         z_norm = np.linalg.norm(z)
-
         if z_norm <= t:
-            return z,t
+            z_, t_ = z,t
         elif z_norm <= -t:
-            return z*0, t*0
+            z_, t_ = z*0, t*0
         else:
             tmp = (z_norm + t)/2
-            return tmp*z/(z_norm+1e-30), tmp
+            z_, t_ = tmp*z/(z_norm+1e-30), tmp
+        return np.append(z_, t_)
+
 
 def project_soc_unit_batch(z, t):
     """
     Batch version of project_soc_unit
     """
     z_norm = np.linalg.norm(z, axis=-1)
+    z_ = z.copy()
+    t_ = t.copy()
 
-    cond1 = z_norm <= t
-    cond2 = z_norm <= -t
-    cond3 = (1-cond1-cond2).astype(bool)
+    cond1 = np.logical_or(z_norm <= -t, t < 0)
+    cond2 = np.logical_or(z_norm  >  t, z_norm > -t)
+    cond3 = z_norm <= t
 
-    tmp = (z_norm + t) / 2
+    tmp = (z_norm + t_) / 2
 
-    z[cond2] = 0.
-    t[cond2] = 0.
+    z_[cond2] = tmp[cond2, None] * z[cond2] / (z_norm[cond2, None]+1e-30)
+    t_[cond2] = tmp[cond2].copy()
 
-    z[cond3] = tmp[cond3, None] * z[cond3] / (z_norm[cond3, None]+1e-30)
-    t[cond3] = tmp[cond3]
-    return z, t
+    z_[cond1] = 0.
+    t_[cond1] = 0.
 
+    z_[cond3] = z[cond3]
+    t_[cond3] = t[cond3]
+    return z_, t_
+def project_soc(z0, A, b, rho=1e0, max_iter=100, tol=1e-5, verbose=False):
+    """
+    Projects the vector x0 onto a second order cone s.t. Ax + b is in SOC.
+    x0 = [nb_size, dim_x] or [dim_x]
+    As = [dim_i, dim_x]
+    bs = [dim_i]
+    max_iter = 100
+    threshold = 1e-5
+    verbose = False
+    """
+    if z0.ndim == 1:
+        nb_size = 1
+        z0 = z0[None]
+    else:
+        nb_size = z0.shape[0]
+    z = z0.T.copy()
+    x = A @ z + b[:,None]
+    lmb = np.zeros_like(x)
 
+    l_side = np.eye(z0.shape[-1]) + rho * A.T @ A
+    l_side_inv = np.linalg.inv(l_side)
+
+    prim_res_norm_ = 1e5
+    dual_res_norm_ = 1e5
+    for j in range(max_iter):
+        # print("Iteration", j)
+        Az_b = A @ z + b[:,None]
+        x = project_soc_unit((Az_b + lmb).T).T
+
+        z_prev = z.copy()
+        z = l_side_inv @ (z0.T + rho * A.T @ (- b[:,None] + x - lmb))
+
+        Az_b = A @ z + b[:, None]
+        prim_res = Az_b - x
+        dual_res = rho*(z - z_prev)
+        lmb = lmb + prim_res
+
+        prim_res_norm = np.linalg.norm(prim_res, axis=0)
+        dual_res_norm = np.linalg.norm(dual_res, axis=0)
+        prev_prim_res_norm = np.copy(prim_res_norm_)
+        prev_dual_res_norm = np.copy(dual_res_norm_)
+
+        prim_res_norm_ = np.max(prim_res_norm)
+        dual_res_norm_ = np.max(dual_res_norm)
+
+        if prim_res_norm_ < tol and dual_res_norm_ < tol:
+            if verbose:
+                print("Project set convex converged at iteration ", j, "!")
+                print("Residual is ", "{:.2e}".format(prim_res_norm_),
+                      "{:.2e}".format(dual_res_norm_))
+            break
+        else:
+            if j == max_iter - 1:
+                if verbose:
+                    print("Project set convex max iteration reached.")
+                    print("Residual is ", "{:.2e}".format(prim_res_norm_),
+                          "{:.2e}".format(dual_res_norm_))
+
+            else:
+                prim_change = np.abs(prev_prim_res_norm - prim_res_norm_) / (prev_prim_res_norm + 1e-30)
+                dual_change = np.abs(prev_dual_res_norm - dual_res_norm_) / (prev_dual_res_norm + 1e-30)
+                if prim_change < 1e-5 and dual_change < 1e-5:
+                    if verbose:
+                        print("Project set convex can't improve anymore at iteration ", j, "!")
+                        print("Residual is ", "{:.2e}".format(prim_res_norm_),
+                              "{:.2e}".format(dual_res_norm_))
+                    break
+
+    if nb_size == 1:
+        return z.T[0]
+    else:
+        return z.T
 def project_unit_ball(x):
     """
     Projects the vector x into the unit ball
@@ -297,7 +265,7 @@ def project_square_batch(x, l, u):
     z[(cond, j[cond])] = l * np.sign(x[(cond, j[cond])])
     return np.maximum(np.minimum(z, u), -u)
 
-def project_square2(x, c, l, u):
+def project_square_c(x, c, l, u):
     """
     Projects the vector x such that l <= ||x-c||_{\infty} <= u
     This defines the region defined by between two square regions centered at 0.
@@ -306,111 +274,232 @@ def project_square2(x, c, l, u):
     z_ = project_square(z, l, u)
     return z_ + c
 
-# Specialized functions
-# def project_soc_batch(x, A_, b_, A_inv_):
-#     """
-#     Projects the batch vector x onto the second order cone (soc) such that ||Ax-b||<= c.Tx + d
-#     A_ = [A ,c], b_ = [ b,d]
-#     """
-#     z_ = x.dot(A_.T) + b_
-#     z__ = z_[:, :-1]
-#     t__ = z_[:, -1]
-#     z_norm = np.linalg.norm(z__, axis=-1)
-#     z_[np.where(z_norm <= -t__), :] = 0.
-#     ind = np.where(z_norm >= t__)
-#     tmp = (z_norm + t__) / 2
-#     z_[ind, -1] = tmp[ind]
-#     # print(tmp.shape, z__.shape, z_.shape)
-#     z_[ind, :-1] = (tmp[ind, None] * z__[ind] / z_norm[ind, None])
-#     return (z_ - b_).dot(A_inv_.T)
-
-
-
-def project_soc_batch2(x, sigma_sq, upper, psi):
-    z =  x[:,1:] * sigma_sq
-    t = (upper - x[:,0])/psi
-    z_norm = np.linalg.norm(z, axis=-1)
-
-    cond1 = z_norm <= t
-    cond2 = z_norm <= -t
-    cond3 = (1-cond1-cond2).astype(bool)
-
-    tmp = (z_norm + t) / 2
-
-    z[cond2] = 0.
-    t[cond2] = 0.
-
-    z[cond3] = tmp[cond3, None] * z[cond3] / (z_norm[cond3, None]+1e-30)
-    t[cond3] = tmp[cond3]
-
-    return np.concatenate([upper-t[:,None]*psi, z/(sigma_sq+1e-30)], axis=-1)
-
-def project_soc_batch3(x, sigma_sq, lower, psi):
-    z =  x[:,1:] * sigma_sq
-    t = (-lower + x[:,0])/psi
-    z_norm = np.linalg.norm(z, axis=-1)
-
-    cond1 = z_norm <= t
-    cond2 = z_norm <= -t
-    cond3 = (1-cond1-cond2).astype(bool)
-
-    tmp = (z_norm + t) / 2
-
-    z[cond2] = 0.
-    t[cond2] = 0.
-
-    z[cond3] = tmp[cond3, None] * z[cond3] / (z_norm[cond3, None] + 1e-30)
-    t[cond3] = tmp[cond3]
-
-    return np.concatenate([t[:,None]*psi+lower, z/(sigma_sq+1e-30)], axis=-1)
-
-
-
-
-# def project_set_convex_batch(x, list_of_proj, max_iter=50):
-#     """
-#     Batch version of project_set_convex
-#     Projects onto the intersection of a set of convex functions.
-#     list_of_proj contains the projection functions in the form f(x), i.e.,
-#     all the other parameters need to be already defined for simplicity.
-#     """
-#     nb_proj = len(list_of_proj)
-#     x_p = np.tile(np.copy(x)[None], (nb_proj, 1, 1))
-#     lmb = np.zeros_like(x_p)
-#
-#     for j in range(max_iter):
-#         x_p_bar = np.mean(x_p, axis=0)
-#         for i in range(nb_proj):
-#             x_p[i] = list_of_proj[i](x_p_bar - lmb[i])
-#         z = np.mean(x_p + lmb, 0)
-#         prim_res = x_p - z
-#         lmb = lmb + prim_res
-#         # norm_prim_res_prev = np.copy(norm_prim_res)
-#         norm_prim_res  = np.linalg.norm(prim_res)
-#         if norm_prim_res < 1e-3 or j == max_iter - 1:
-#         # if np.abs(norm_prim_res - norm_prim_res_prev) < 1e-5 or j == max_iter - 1: #if the change is small
-#         #     print(norm_prim_res)
-#             break
-#     return z
-
 def project_block_lower_triangular(z, x_dim, u_dim, N):
+    """
+    """
     for i in range(N):
         z[i * u_dim, i * x_dim:(i + 1) * x_dim] = 0.
     return z
 
-import torch
-def project_soc_batch_torch(x, A_, b_, A_inv_):
+
+projections = {"SOC": project_soc_unit, "bound": project_bound, "linear": project_linear,
+               "quadratic": project_quadratic, "square":project_square}
+
+
+def project_set_convex(x0, As=[], bs=[], projections=[], rho=1, max_iter=200, threshold=1e-4, verbose=False):
     """
-    Projects the batch vector x onto the second order cone (soc) such that ||Ax-b||<= c.Tx + d
-    A_ = [A ,c], b_ = [ b,d]
+    Projects the vector x0 onto the intersection of a set of second order cones.
+    x0 = [nb_size, dim_x] or [dim_x]
+    As = list of [dim_i, dim_x]
+    bs = list of [dim_i]
+    projections = a list of projection functions "bound", "linear", "quadratic", "SOC".
+    max_iter = 100
+    threshold = 1e-5
+    verbose = False
     """
-    z_ = x @ A_.T + b_
-    z__ = z_[:, :-1]
-    t__ = z_[:, -1]
-    z_norm = torch.linalg.norm(z__, dim=-1)
-    z_[torch.where(z_norm < -t__, True, False), :] = 0.
-    ind = torch.where(z_norm > t__, True, False)
-    tmp = (z_norm + t__) / 2
-    z_[ind, -1] = tmp[ind]
-    z_[ind, :-1] = (tmp[ind, None] * z__[ind] / z_norm[ind, None])
-    return (z_ - b_) @ A_inv_.T
+    nb_proj = len(projections)
+    if x0.ndim == 1:
+        nb_size = 1
+        x0 = x0[None]
+    else:
+        nb_size = x0.shape[0]
+    x=x0.T.copy()
+    z = []
+    lmb = []
+    l_side = np.eye(x0.shape[-1])
+    l_side_add = 0.
+    for i in range(nb_proj):
+        z += [As[i] @ x + bs[i][:,None]]
+        lmb += [z[-1].copy()*0]
+        l_side_add += As[i].T @ As[i]
+
+    l_side_inv = np.linalg.inv(l_side + rho * l_side_add)
+
+    prim_res_norm = np.ones((nb_proj, nb_size))*1e5
+    dual_res_norm = np.ones((nb_proj, nb_size))*1e5
+    prim_res_norm_ = 1e5
+    dual_res_norm_ = 1e5
+    for j in range(max_iter):
+        r_side = 0.
+        for i in range(nb_proj):
+            r_side += As[i].T @ (- bs[i][:,None] + z[i] - lmb[i])
+        x = l_side_inv @ (x0.T + rho * r_side)
+
+        z_prev = z.copy()
+
+        prev_prim_res_norm = np.copy(prim_res_norm_)
+        prev_dual_res_norm = np.copy(dual_res_norm_)
+
+        for i in range(nb_proj):
+            Ax_b = As[i] @ x + bs[i][:,None]
+            z[i] = projections[i]((Ax_b + lmb[i]).T).T
+
+            prim_res = Ax_b - z[i]
+            dual_res = rho*As[i].T @ (z[i] - z_prev[i])
+            lmb[i] = lmb[i] + prim_res
+            prim_res_norm[i] = np.linalg.norm(prim_res, axis=0)
+            dual_res_norm[i] = np.linalg.norm(dual_res, axis=0)
+
+        prim_res_norm_ = np.max(prim_res_norm)
+        dual_res_norm_ = np.max(dual_res_norm)
+        # prim_res_norm_ = np.linalg.norm(prim_res_norm)
+        # dual_res_norm_ = np.linalg.norm(dual_res_norm)
+        # if verbose: print(prim_res_norm,"\n", dual_res_norm, "\n",)
+        if prim_res_norm_ < threshold and dual_res_norm_ < threshold:
+            if verbose:
+                print("Project set convex converged at iteration ", j, "!")
+                print("Residual is ", "{:.2e}".format(prim_res_norm_),
+                      "{:.2e}".format(dual_res_norm_))
+            break
+        else:
+            if j == max_iter - 1:
+                if verbose:
+                    print("Project set convex max iteration reached.")
+                    print("Residual is ", "{:.2e}".format(prim_res_norm_),
+                          "{:.2e}".format(dual_res_norm_))
+
+            else:
+                prim_change = np.abs(prev_prim_res_norm - prim_res_norm_) / (prev_prim_res_norm + 1e-30)
+                dual_change = np.abs(prev_dual_res_norm - dual_res_norm_) / (prev_dual_res_norm + 1e-30)
+                if prim_change < 1e-5 and dual_change < 1e-5:
+                    if verbose:
+                        print("Project set convex can't improve anymore at iteration ", j, "!")
+                        print("Residual is ", "{:.2e}".format(prim_res_norm_),
+                              "{:.2e}".format(dual_res_norm_))
+                    break
+
+    if nb_size == 1:
+        return x.T[0]
+    else:
+        return x.T
+#
+# def project_set_convex2(z0, As=[], bs=[], projections=[], rho=1, max_iter=200, threshold=1e-4, verbose=False):
+#     """
+#     Projects the vector x0 onto the intersection of a set of second order cones.
+#     x0 = [nb_size, dim_x] or [dim_x]
+#     As = list of [dim_i, dim_x]
+#     bs = list of [dim_i]
+#     projections = a list of projection functions "bound", "linear", "quadratic", "SOC".
+#     max_iter = 100
+#     threshold = 1e-5
+#     verbose = False
+#     """
+#     nb_proj = len(projections)
+#     if z0.ndim == 1:
+#         nb_size = 1
+#         z0 = z0[None]
+#     else:
+#         nb_size = z0.shape[0]
+#     z=z0.T.copy()
+#     x = []
+#     lmb = []
+#     l_side = np.eye(z0.shape[-1])
+#     l_side_add = 0.
+#     for i in range(nb_proj):
+#         # x += [np.zeros((As[i].shape[0], nb_size))]
+#         x += [As[i] @ z + bs[i][:,None]]
+#         lmb += [x[-1].copy()*0.]
+#         l_side_add += As[i].T @ As[i]
+#
+#     l_side_inv = np.linalg.inv(l_side + rho * l_side_add)
+#
+#     prim_res_norm = np.ones((nb_proj, nb_size))*1e5
+#     dual_res_norm = np.ones((nb_proj, nb_size))*1e5
+#     prim_res_norm_ = 1e5
+#     dual_res_norm_ = 1e5
+#     for j in range(max_iter):
+#         # print("Iteration", j)
+#         for i in range(nb_proj):
+#             Az_b = As[i] @ z + bs[i][:,None]
+#             x[i] = projections[i]((Az_b + lmb[i]).T).T
+#
+#         z_prev = z.copy()
+#         r_side = 0.
+#         for i in range(nb_proj):
+#             r_side += As[i].T @ (- bs[i][:,None] + x[i] - lmb[i])
+#         z = l_side_inv @ (z0.T + rho * r_side)
+#         for i in range(nb_proj):
+#             Az_b = As[i] @ z + bs[i][:, None]
+#             prim_res = Az_b - x[i]
+#             dual_res = rho * As[i].T @ (z - z_prev)
+#             lmb[i] = lmb[i] + prim_res
+#
+#             prim_res_norm[i] = np.linalg.norm(prim_res, axis=0)
+#             dual_res_norm[i] = np.linalg.norm(dual_res, axis=0)
+#         prev_prim_res_norm = np.copy(prim_res_norm_)
+#         prev_dual_res_norm = np.copy(dual_res_norm_)
+#
+#         prim_res_norm_ = np.max(prim_res_norm)
+#         dual_res_norm_ = np.max(dual_res_norm)
+#
+#         if prim_res_norm_ < threshold and dual_res_norm_ < threshold:
+#             if verbose:
+#                 print("Project set convex converged at iteration ", j, "!")
+#                 print("Residual is ", "{:.2e}".format(prim_res_norm_),
+#                       "{:.2e}".format(dual_res_norm_))
+#             break
+#         else:
+#             if j == max_iter - 1:
+#                 if verbose:
+#                     print("Project set convex max iteration reached.")
+#                     print("Residual is ", "{:.2e}".format(prim_res_norm_),
+#                           "{:.2e}".format(dual_res_norm_))
+#
+#             else:
+#                 prim_change = np.abs(prev_prim_res_norm - prim_res_norm_) / (prev_prim_res_norm + 1e-30)
+#                 dual_change = np.abs(prev_dual_res_norm - dual_res_norm_) / (prev_dual_res_norm + 1e-30)
+#                 if prim_change < 1e-5 and dual_change < 1e-5:
+#                     if verbose:
+#                         print("Project set convex can't improve anymore at iteration ", j, "!")
+#                         print("Residual is ", "{:.2e}".format(prim_res_norm_),
+#                               "{:.2e}".format(dual_res_norm_))
+#                     break
+#
+#     if nb_size == 1:
+#         return z.T[0], x
+#     else:
+#         return z.T, x
+
+
+
+def project_set_convex_dykstra(x0, projections=[],  max_iter=200, tol=1e-4, verbose=False):
+    """
+    Dykstra's projection algorithm
+    Projects the vector x0 onto the intersection of a set of second order cones.
+    x0 = [nb_size, dim_x] or [dim_x]
+    As = list of [dim_i, dim_x]
+    bs = list of [dim_i]
+    projections = a list of projection functions "bound", "linear", "quadratic", "SOC".
+    max_iter = 100
+    threshold = 1e-5
+    verbose = False
+    """
+    d = len(projections)
+    if x0.ndim == 1:
+        nb_size = 1
+        x0 = x0[None]
+    else:
+        nb_size = x0.shape[0]
+    u = x0.copy()
+    z = np.zeros((d, nb_size, x0.shape[-1]))
+
+    k = 0
+    cI = np.stack([10.]*nb_size)
+    while k<= max_iter and np.any(cI >= tol):
+        # print("Iteration", n)
+        cI = cI*0
+        for i in range(d):
+            prev_u = u.copy()
+            u = projections[i](prev_u - z[i])
+            prev_z = z[i].copy()
+            z[i] = u - (prev_u - prev_z)
+
+            # Stop condition
+            cI += np.linalg.norm(prev_z - z[i], axis=-1)**2
+        k += 1
+    if k == max_iter+1:
+        if verbose: print("Max iteration achieved.")
+    else:
+        if verbose: print("Converged at iteration", k)
+    if verbose: print("Residual:","{:.2e}".format(np.max(cI)))
+    return u

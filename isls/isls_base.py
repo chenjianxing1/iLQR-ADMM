@@ -1,19 +1,14 @@
-from .sls import SLS
 import numpy as np
+from .base import Base
 
-class iSLSBase(SLS):
+class iSLSBase(Base):
     def __init__(self, x_dim, u_dim, N):
         super().__init__(x_dim, u_dim ,N)
         self._forward_model = None
         self._cost_function = None
 
         nb_max_iterations_line_search = 50
-        # self.alphas = np.zeros((nb_max_iterations_line_search,))
-        # self.alphas[0] = 1.
-        # for i in range(nb_max_iterations_line_search - 1):
-        #     self.alphas[i+1] = self.alphas[i] * 0.6
-
-        self.alphas = 10.**np.linspace(0, -3, nb_max_iterations_line_search)
+        self.alphas = 10.**np.linspace(0., -5., nb_max_iterations_line_search)
 
         self._cost = None
         self._cur_decrease_cost = 1e5
@@ -27,6 +22,55 @@ class iSLSBase(SLS):
         self._k = None
 
         self.cost_log = []
+
+    #################################### AT OPTIMALITY, RUN THESE ################################
+
+    def get_trajectory_sls(self, x0, K, k, noise_scale=0):
+        batch_size = x0.shape[0] if x0.ndim == 2 else 1
+        u_log = np.zeros((batch_size, self.N, self.u_dim))
+        x_log = np.zeros((batch_size, self.N+1, self.x_dim))
+        x_log[:, 0] = x0
+        x_vec = np.zeros((batch_size, self.N * self.x_dim))
+        for i in range(self.N):
+            x_vec[:, i * self.x_dim:(i + 1) * self.x_dim] = x_log[:, i] - self.x_nom[i]
+            u_log[:, i] = (x_vec @ K.T + k)[:, i * self.u_dim:(i + 1) * self.u_dim] + self.u_nom[i]
+            w = np.random.normal(loc=0, scale=noise_scale, size=x0.shape)
+            x_log[:, i+1] = self.forward_model(x_log[:, i], u_log[:, i]) + w
+        if x0.ndim == 2:
+            return x_log[0, :-1], u_log[0]
+        else:
+            return x_log[:, :-1], u_log
+
+    def get_trajectory_batch(self, x0, us, noise_scale=0):
+        batch_size = x0.shape[0] if x0.ndim == 2 else 1
+        u_log = np.zeros((batch_size, self.N, self.u_dim))
+        x_log = np.zeros((batch_size, self.N+1, self.x_dim))
+        x_log[:, 0] = x0
+        for i in range(self.N):
+            u_log[:, i] = us[i]
+            w = np.random.normal(loc=0, scale=noise_scale, size=x0.shape)
+            x_log[:, i + 1] = self.forward_model(x_log[:, i], u_log[:, i]) + w
+
+        if x0.ndim == 1:
+            return x_log[0, :-1], u_log[0]
+        else:
+            return x_log[:, :-1], u_log
+
+    def get_trajectory_dp(self, x0, K, k, noise_scale=0):
+        batch_size = x0.shape[0] if x0.ndim == 2 else 1
+        u_log = np.zeros((batch_size, self.N, self.u_dim))
+        x_log = np.zeros((batch_size, self.N+1, self.x_dim))
+        x_log[:, 0] = x0
+        for i in range(self.N):
+            u_log[:, i] = x_log[:, i].dot(K[i].T) + k[i]
+            w = np.random.normal(loc=0, scale=noise_scale, size=x0.shape)
+            x_log[:, i+1] = self.forward_model(x_log[:, i], u_log[:, i]) + w
+        if x0.ndim == 2:
+            return x_log[0, :-1], u_log[0]
+        else:
+            return x_log[:, :-1], u_log
+
+
 
     ############################## Setter and Getters ################################
     @property
@@ -108,10 +152,10 @@ class iSLSBase(SLS):
         self.A, self.B = value[0], value[1]
         for i in range(self.N - 1, 0, -1):
             self.D[i * self.x_dim:, (i - 1) * self.u_dim:i * self.u_dim] = \
-                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ self.B[i]
+                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ self.B[i-1]
 
             self.C[i * self.x_dim:, (i - 1) * self.x_dim:i * self.x_dim] = \
-                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ self.A[i]
+                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ self.A[i-1]
 
     def reset(self):
         self.PHI_U = np.zeros((self.N * self.u_dim, self.N * self.x_dim))

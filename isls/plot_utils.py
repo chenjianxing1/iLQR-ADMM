@@ -64,6 +64,109 @@ def plot_robot_base(p1, ax,ec="k",fc="blue", sz=1.2, alpha=1., **kwargs):
         patch = Line2D(tmp[:,0], tmp[:, 1],  color=ec, alpha=alpha, lw=2)
         ax.add_line(patch)
 
+# Boyangs code
+# plotArm(ax=ax[0], a1=param.x_nom[-1, :param.nbVarX], d1=param.linkLengths, p1=np.array([0., 0.]), sz=0.08,
+#         facecol=param.facecolor / 10,
+#         edgecol=param.edgecolor, alpha=0.6)
+# ax: figure handle
+# a1: angle of the joint
+# d1: length of the link
+# p1: the position of the base of the robot
+# sz: the width of the link
+# facecol: the color of the link face
+# edgecol: the color of the link edge
+# alpha: the transparency of the robot
+import matplotlib.path as mpath
+from matplotlib.patches import PathPatch
+
+def plotArmLink(ax, a1, d1, p1, sz, facecol, edgecol, alpha, zorder):
+
+    nbSegm = 30
+
+    Path = mpath.Path
+
+    # calculate the link border
+    xTmp = np.zeros((2, nbSegm))
+    p1 = p1 + np.array([0, 0]).reshape(2, -1)
+    t1 = np.linspace(0, -np.pi, int(nbSegm/2))
+    t2 = np.linspace(np.pi, 0, int(nbSegm/2))
+    xTmp[0, :] = np.hstack((sz*np.sin(t1), d1+sz*np.sin(t2)))
+    xTmp[1, :] = np.hstack((sz*np.cos(t1), sz*np.cos(t2)))
+    # xTmp[2, :] = np.zeros((1, nbSegm))
+    R = np.array([[np.cos(a1), -np.sin(a1)], [np.sin(a1), np.cos(a1)]])
+    x = R @ xTmp + np.matlib.repmat(p1, 1, nbSegm)
+    p2 = R @ np.array([d1, 0]).reshape(2, -1) + p1
+
+    # add the link patch
+    codes = Path.LINETO * np.ones(np.size(x[0:2, :], 1), dtype=Path.code_type)
+    codes[0] = Path.MOVETO
+    path = Path(x[0:2, :].T, codes)
+    patch = PathPatch(path, facecolor=facecol, edgecolor=edgecol, alpha=alpha, zorder=zorder)
+    ax.add_patch(patch)
+
+    # add the initial point
+    msh = np.vstack((np.sin(np.linspace(0, 2*np.pi, nbSegm)),
+                     np.cos(np.linspace(0, 2*np.pi, nbSegm)))) * sz * 0.4
+
+    codes = Path.LINETO * np.ones(np.size(msh[0:2, :], 1), dtype=Path.code_type)
+    codes[0] = Path.MOVETO
+    path = Path((msh[0:2, :]+p1).T, codes)
+    patch = PathPatch(path, facecolor=facecol, edgecolor=edgecol, alpha=alpha, zorder=zorder)
+    ax.add_patch(patch)
+    # add the end point
+    path = Path((msh[0:2, :]+p2).T, codes)
+    patch = PathPatch(path, facecolor=facecol, edgecolor=edgecol, alpha=alpha, zorder=zorder)
+    ax.add_patch(patch)
+
+    return p2
+
+
+def plotArmBasis(ax, p1, sz, facecol, edgecol, alpha, zorder):
+    Path = mpath.Path
+
+    nbSegm = 30
+    sz = sz*1.2
+
+    xTmp1 = np.zeros((2, nbSegm))
+    t1 = np.linspace(0, np.pi, nbSegm-2)
+    xTmp1[0, :] = np.hstack([sz*1.5, sz*1.5*np.cos(t1), -sz*1.5])
+    xTmp1[1, :] = np.hstack([-sz*1.2, sz*1.5*np.sin(t1), -sz*1.2])
+    x1 = xTmp1 + np.matlib.repmat(p1, 1, nbSegm)
+    # add the link patch
+    codes = Path.LINETO * np.ones(np.size(x1, 1), dtype=Path.code_type)
+    codes[0] = Path.MOVETO
+    path = Path(x1.T, codes)
+    patch = PathPatch(path, facecolor=facecol, edgecolor=edgecol, alpha=alpha, zorder=zorder)
+    ax.add_patch(patch)
+
+
+def plotArm(ax, a1, d1, p1, sz=.1, facecol=None, edgecol=None, alpha=1, zorder=1):
+
+    if edgecol is None:
+        edgecol = [.99, .99, .99]
+    if facecol is None:
+        facecol = [.5, .5, .5]
+    p1 = np.reshape(p1, (-1, 1))
+    plotArmBasis(ax, p1, sz, facecol, edgecol, alpha, zorder)
+    for i in range(len(a1)):
+        p1 = plotArmLink(ax=ax, a1=np.sum(a1[0:i+1]), d1=d1[i],
+                    p1=p1+np.array([0., 0.]).reshape(2, -1),
+                    sz=sz, facecol=facecol, edgecol=edgecol, alpha=alpha, zorder=zorder)
+
+
+def plot_planar_axis(ax, p):
+    length = 0.2
+    num = np.size(p, 0)
+    for i in range(num):
+        x_1 = np.array([p[i, 0], p[i, 0] + length * np.cos(p[i, 2])])
+        y_1 = np.array([p[i, 1], p[i, 1] + length * np.sin(p[i, 2])])
+        ln1, = ax.plot(x_1, y_1, lw=2, solid_capstyle='round', color='r', zorder=1)
+        ln1.set_solid_capstyle('round')
+
+        x_2 = np.array([p[i, 0], p[i, 0] + length * np.cos(p[i, 2] + np.pi / 2)])
+        y_2 = np.array([p[i, 1], p[i, 1] + length * np.sin(p[i, 2] + np.pi / 2)])
+        ln2, = ax.plot(x_2, y_2, lw=2, solid_capstyle='round', color='b', zorder=1)
+        ln2.set_solid_capstyle('round')
 
 def rrect(wlc, color, ax=None):
     # draw a rounded rectangle (using complex numbers and a kronecker sum :-)

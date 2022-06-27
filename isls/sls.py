@@ -6,14 +6,58 @@ from .admm import ADMM
 
 
 class SLS(SLSBase):
-    def __init__(self, x_dim, u_dim, N, dtype=np.float64):
+    def __init__(self, x_dim, u_dim, N):
         """
         System Level Synthesis module for practical use.
+
+        Supports solution methods below:
+
+            1. batch: least-square solution to LQT and SLS problems. Supports costs correlating different time-steps.
+                Computes an optimal solution starting from an initial state x0. DOES NOT compute a feedback controller.
+            2. dp   :  dynamic programming solution to LQT problems. DOES NOT support costs correlating different
+                time-steps. Computes a feedback controller in the form u_t = K_t @ x_t + k_t. Feedback is only on the
+                current state x_t.
+            3. sls  : system level synthesis solution to LQT and SLS problems. Supports costs correlating different
+                time-steps. Computes a feedback controller in the form u_t = K{0:t} @ x{0:t} + k_t. Feedback is on the
+                current state x_t and all the past states x{0:t-1}.
+        Parameters
+        ----------
+        x_dim : int
+                Dimension of the states
+        u_dim : int
+                Dimension of the control
+        N     : int
+                Number of time-steps
+
+        Examples
+        --------
+
+
         """
-        super().__init__(x_dim, u_dim, N, dtype=dtype)
 
+        super().__init__(x_dim, u_dim, N)
 
+    def solve(self, x0=None, method='sls'):
+        """
+        Solves a linear quadratic problem
+        Parameters
+        ----------
+        x0 : ndarray, required only if method='batch'.
+             Initial state.
+        method : {'batch', 'dp' or 'sls'}, default='sls'
+                 Method to solve LQT-SLS problems.
 
+        Returns
+        -------
+
+        """
+        if method == 'batch':
+            assert x0 is not None
+            return self.solve_batch(x0)
+        elif method == 'dp':
+            return self.solve_dp()
+        elif method == 'sls':
+            return self.solve_sls()
 
     def solve_batch(self, x0):
         """
@@ -38,7 +82,7 @@ class SLS(SLSBase):
         x_opt = C_x0 + self.D @ u_opt
         return x_opt.reshape(self.N, -1), u_opt.reshape(self.N, -1)
 
-    def solve_DP(self, Qr=None, Rr=None, ur=None, xr=None, return_Qs=False):
+    def solve_dp(self, Qr=None, Rr=None, ur=None, xr=None, return_Qs=False):
         """
         Solving LQT problem with dynamic programming,
         assuming that there is no cost multiplying x and u -> Cux = 0
@@ -205,9 +249,7 @@ class SLS(SLSBase):
 
 
     ######################################### Inequalities #########################################################
-
-    def ADMM_LQT_Batch(self, x0, list_of_proj_x=[], list_of_proj_u=[], max_iter=20, rho_x=None, rho_u=None, alpha=1.,
-                       z_x_init=None, z_u_init=None,
+    def ADMM_LQT_Batch(self, x0, project_x=False, project_u=False, max_iter=20, rho_x=None, rho_u=None, alpha=1.,
                        threshold=1e-3,  verbose=False, log=False):
         """
         Solves LQT-ADMM in batch form.
@@ -215,37 +257,45 @@ class SLS(SLSBase):
         """
 
         Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
+
         # Initialize some values
-        DQ = self.D.T @ self.Q
-        DQD = DQ @ self.D
-        l_side = DQD + self.R
-        if Qr is not None:
-            l_side += self.D.T @ Qr @ self.D
-        if Rr is not None:
-            l_side += Rr
-        l_side_inv = np.array(np.linalg.inv(l_side))
-
-
+        Su = self.D
+        SuTQ = Su.T @ self.Q
+        SuTQSu = SuTQ @ Su
+        l_side = SuTQSu + self.R
         Sx_x0 = self.C[:, :self.x_dim] @ x0
-        r_side = DQ.dot(self.xd - Sx_x0)
+        r_side = SuTQ.dot(self.xd - Sx_x0)
+
+        z_u_init = np.linalg.solve(np.array(l_side), r_side)
+
+        z_x_init = Sx_x0 + Su @ z_u_init
         if Qr is not None:
-            r_side +=  - self.D.T @ Qr @ Sx_x0
+            Qr = scipy.sparse.csc_matrix(Qr)
+            SuTQr = Su.T @ Qr
+            l_side += SuTQr @ Su
+            r_side += - SuTQr @ Sx_x0
+        if Rr is not None:
+            Rr = scipy.sparse.csc_matrix(Rr)
+            l_side += Rr
+        l_side_inv = np.linalg.inv(np.array(l_side))
 
 
         def f_argmin(x, u):
             r_side_ = r_side.copy()
-            if Qr is not None: r_side_ += self.D.T @ Qr @ x
+            if Qr is not None: r_side_ += SuTQr @ x
             if Rr is not None: r_side_ += Rr @ u
             u_hat = l_side_inv @ r_side_
-            x_hat = Sx_x0 + self.D @ u_hat
+            x_hat = Sx_x0 + Su @ u_hat
             return x_hat, u_hat
 
-        return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, list_of_proj_x, list_of_proj_u,alpha=alpha,
-                    z_x_init=z_x_init, z_u_init=z_u_init,
+        return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, project_x, project_u, alpha=alpha,
+                    z_x_init=z_x_init, z_u_init=z_u_init,Qr=Qr, Rr=Rr,
                         max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
 
 
-    def ADMM_LQT_DP(self, x0, list_of_proj_x=[], list_of_proj_u=[], max_iter=2000, rho_x=None, rho_u=None,alpha=1.,
+
+
+    def ADMM_LQT_DP(self, x0, project_x=False, project_u=False, max_iter=2000, rho_x=None, rho_u=None,alpha=1.,
                     threshold=1e-3, verbose=False, log=False):
         """
         Solves LQT-ADMM with dynamic programming.
@@ -261,31 +311,45 @@ class SLS(SLSBase):
                                  Rr=Rr, Qr=Qr, xr=x, ur=u)
             x_nom, u_nom = self.get_trajectory_dp(x0, K, k)
             return x_nom.flatten(), u_nom.flatten(), K, k
+        Qr_ = scipy.linalg.block_diag(*Qr) if Qr is not None else None
+        Rr_ = scipy.linalg.block_diag(*Rr) if Rr is not None else None
+        return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, project_x=project_x, project_u=project_u, alpha=alpha,
+                       Qr=Qr_, Rr=Rr_,max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
 
-        return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, list_of_proj_x, list_of_proj_u, alpha=alpha,
-                       max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
-
-    def ADMM(self, list_of_proj_x=[], list_of_proj_u=[], max_iter=5000, rho_x=0., rho_u=0., alpha=1.,threshold=1e-3, verbose=False,log=False):
+    def ADMM_SLS(self, project_x=False, project_u=False, max_iter=5000, rho_x=0., rho_u=0., alpha=1.,threshold=1e-3, verbose=False,log=False):
         """
         Solves system level synthesis problem with ADMM.
         Robustness of control commands being in bounds with respect to a initial position distribution only.
         """
-        Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
+        # Solve for the remaining part of the PHI_U
+        self.l_side_invs = None
+        PHI_U, du = self.solve_sls()
+
 
         # Initialize some values
-        DTQ = self.D.T @ self.Q
-        DTQr = self.D.T @ Qr
-        DTD =  DTQr @ self.D
-        DTQD = DTQ @ self.D
-        I = np.eye(self.R.shape[0])
-        r_side = - DTQ @ self.C - DTQr @ self.C
-        l_side_fb = np.array(DTQD + self.R) + rho_u * I + DTD
+        Sx = self.C[:, :self.x_dim//2]
+        Su = self.D
+        Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
+        Rr = scipy.sparse.csr_matrix(Rr)
+        SuTQ = Su.T @ self.Q
+        SuTQSu = SuTQ @ Su
 
-        q_d = DTQ @ self.xd
-        l_side_invs = self.compute_inverses(l_side_fb)
-        AA_inv = l_side_invs[0]
+        r_side_fb = - SuTQ @ Sx
+        r_side_ff =   SuTQ @ self.xd
+        l_side = np.array(SuTQSu + self.R)
 
-        PHI_U, du = self.solve_sls()
+
+        if Qr is not None:
+            SuTQr = Su.T @ Qr
+            SuTQrSu = SuTQr @ Su
+
+            l_side += SuTQrSu
+            r_side_fb += - SuTQr @ Sx
+        if Rr is not None:
+            l_side += Rr
+
+
+        l_side_invs = self.compute_inverses(l_side)
 
         # Init ADMM
         if log: logs = []
@@ -296,75 +360,91 @@ class SLS(SLSBase):
         z_u = np.zeros(dim_u)
 
 
-        z_u[:, 1:] = PHI_U[:, :self.x_dim//2]
-        z_u[:, 0] = du
-        z_x[:, 1:] = (self.C + self.D @ PHI_U)[:, :self.x_dim//2]
-        z_x[:, 0] = self.D @ du
-
         lmb_x = 0
         lmb_u = 0
 
-        x_x = z_x.copy()
-        x_u = z_u.copy()
 
         prim_res_norm = 1e6
         dual_res_norm = 1e6
         print("Start iterating..")
-
+        l_side_inv = np.array(l_side_invs[0])
+        r_side = np.concatenate([r_side_ff[:,None], r_side_fb], axis=-1)
         def f_argmin(x, u):
-            x_r = DTQr @ x
-            u_r = rho_u * u
-            x_u[:, 0] = AA_inv @ ( q_d + x_r[:,0] + u_r[:, 0])
-            x_x[:, 0] = self.D @ x_u[:, 0]
-            x_u[:, 1:] = np.matmul(AA_inv, r_side[:, :self.x_dim//2] + x_r[:, 1:] + u_r[:, 1:])
-            x_x[:, 1:] = self.C[:, :dim_x[1]-1] + self.D @ x_u[:, 1:]
-            return x_x, x_u
+            r_side_ = r_side.copy()
+            if project_x:
+                r_side_ += SuTQr @ x
+            if project_u:
+                r_side_ += Rr @ u
 
+            u_ = l_side_inv @ r_side_
+            x_ = Su @ u_
+            x_[:, 1:] += Sx
+            return x_, u_
+
+        reg_x = None
+        reg_u = None
         for j in range(max_iter):
 
-            ## First step
-            x_x, x_u = f_argmin(z_x - lmb_x, z_u - lmb_u)
+            #### STEP 1 ####
+            if project_x: reg_x = z_x - lmb_x
+            if project_u: reg_u = z_u - lmb_u
+            x_x, x_u = f_argmin(reg_x, reg_u)
 
-            ## Projection step
-            z_prev_x = z_x
-            z_prev_u = z_u
-
-            z_x_ = alpha * x_x + (1 - alpha) * z_x
-            z_u_ = alpha * x_u + (1 - alpha) * z_u
-
-            z_x = project_set_convex(z_x_  + lmb_x , list_of_proj_x, threshold=1e-2)
-            z_u = project_set_convex(z_u_  + lmb_u , list_of_proj_u, threshold=1e-2)
-
-            # Dual update
-            prim_res_x = z_x_ - z_x
-            prim_res_u = z_u_ - z_u
-
-            lmb_x += prim_res_x
-            lmb_u += prim_res_u
-
+            #### STEP 2 ####
             prev_prim_res_norm = np.copy(prim_res_norm)
             prev_dual_res_norm = np.copy(dual_res_norm)
+            if project_x:
+                z_prev_x = z_x.copy()
+                z_x_ = alpha * x_x + (1 - alpha) * z_x
+                z_x = project_x(z_x_ + lmb_x)
 
-            prim_res_norm = np.linalg.norm(prim_res_x) ** 2 + np.linalg.norm(prim_res_u) ** 2
-            dual_res_norm = np.linalg.norm(z_x - z_prev_x) ** 2 + np.linalg.norm(z_u - z_prev_u) ** 2
+                prim_res_x = x_x - z_x
+                lmb_x += prim_res_x
 
-            if log: logs += [np.array([prim_res_norm,dual_res_norm])]
-            if verbose: print(prim_res_norm, dual_res_norm)
+            if project_u:
+                z_prev_u = z_u.copy()
+                z_u_ = alpha * x_u + (1 - alpha) * z_u
+                z_u = project_u(z_u_ + lmb_u)
+                prim_res_u = x_u - z_u
+                lmb_u += prim_res_u
+
+            prim_res_norm = 0.
+            dual_res_norm = 0.
+            if project_x:
+                dual_res_norm += np.linalg.norm(Qr @ (z_x - z_prev_x))
+                prim_res_norm += np.linalg.norm(Qr @ prim_res_x)
+            if project_u:
+                dual_res_norm += np.linalg.norm(Rr @ (z_u - z_prev_u))
+                prim_res_norm += + np.linalg.norm(Rr @ prim_res_u)
+
+            logs += [np.array([prim_res_norm, dual_res_norm])]
             if prim_res_norm < threshold and dual_res_norm < threshold:  # or np.abs(prim_res_norm-prim_res_norm_prev) < 1e-5:
-                print("Converged at iteration ", j, "!")
-                print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
+                if verbose:
+                    print("ADMM converged at iteration ", j, "!")
+                    print("ADMM residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
                 break
             else:
                 prim_change = np.abs(prev_prim_res_norm - prim_res_norm) / (prev_prim_res_norm + 1e-30)
                 dual_change = np.abs(prev_dual_res_norm - dual_res_norm) / (prev_dual_res_norm + 1e-30)
-                if prim_change < 1e-5 and dual_change < 1e-5:
-                    print("Can't improve anymore at iteration ", j, "!")
-                    print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
-                    print("Residual change is ", "{:.2e}".format(prim_change), "{:.2e}".format(dual_change))
+                if prim_change < 1e-2 and dual_change < 1e-2:
+                    if verbose:
+                        print("ADMM can't improve anymore at iteration ", j, "!")
+                        print("ADMM residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
+                        print("ADMM residual change is ", "{:.2e}".format(prim_change), "{:.2e}".format(dual_change))
                     break
+                else:
+                    pass
+                    # if j >= 10:
+                    #     prim_osc = np.abs(logs[-4:] - np.mean(logs[-8:-4]))
+                    #     if np.abs(np.mean(logs[-4:]) - np.mean(logs[-8:-4])) < 1e-4:
+                    #         print("Cost is oscillating at iteration", j)
+                    #         break
+
             if j == max_iter - 1:
-                print("Residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
-                print("Max iteration reached.")
+                if verbose:
+                    print("ADMM residuals-> primal:", "{:.2e}".format(prim_res_norm), "dual:",
+                          "{:.2e}".format(dual_res_norm))
+                    print("ADMM: Max iteration reached.")
 
         du = x_u[:,0]
         phi_u = np.concatenate([x_u[:,1:dim_u[1]], PHI_U[:, dim_u[1]-1:] ], axis=-1)
@@ -372,6 +452,7 @@ class SLS(SLSBase):
             return du, phi_u, logs
         else:
             return du, phi_u
+
 
 
 

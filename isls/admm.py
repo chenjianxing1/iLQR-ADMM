@@ -5,7 +5,7 @@ from .projections import *
 
 def ADMM(shape_x, shape_u, f_argmin, project_x=False, project_u=False,
          z_x_init=None, z_u_init=None, lmb_x_init=None, lmb_u_init=None, Qr=None, Rr=None,
-         max_iter=20,alpha=1., threshold=1e-3, verbose=False, return_lmb=False, log=False):
+         max_iter=20,alpha=1., tol=1e-3, verbose=False, return_lmb=False, log=False):
 
     logs = []
 
@@ -69,7 +69,7 @@ def ADMM(shape_x, shape_u, f_argmin, project_x=False, project_u=False,
             prim_res_norm += + np.linalg.norm(prim_res_u)
 
         logs += [np.array([prim_res_norm,dual_res_norm])]
-        if prim_res_norm < threshold and dual_res_norm < threshold:  # or np.abs(prim_res_norm-prim_res_norm_prev) < 1e-5:
+        if prim_res_norm < tol and dual_res_norm < tol:  # or np.abs(prim_res_norm-prim_res_norm_prev) < 1e-5:
             if verbose:
                 print("ADMM converged at iteration ", j, "!")
                 print("ADMM residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))
@@ -77,7 +77,7 @@ def ADMM(shape_x, shape_u, f_argmin, project_x=False, project_u=False,
         else:
             prim_change = np.abs(prev_prim_res_norm - prim_res_norm)/(prev_prim_res_norm+1e-30)
             dual_change = np.abs(prev_dual_res_norm - dual_res_norm)/(prev_dual_res_norm+1e-30)
-            if  prim_change < threshold and dual_change < threshold:
+            if  prim_change < tol and dual_change < tol:
                 if verbose:
                     print("ADMM can't improve anymore at iteration ", j, "!")
                     print("ADMM residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))

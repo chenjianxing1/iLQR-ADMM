@@ -75,11 +75,11 @@ class SLS(SLSBase):
             self.Q = self.Q.toarray()
 
         if self.l_side_invs is None:
-            self.l_side_invs = self.compute_inverses(np.array(self.D.T @ self.Q @ self.D + self.R))
+            self.l_side_invs = self.compute_inverses(np.array(self.Su.T @ self.Q @ self.Su + self.R))
 
-        C_x0 = self.C[:, :self.x_dim] @ x0
-        u_opt = self.l_side_invs[0] @ self.D.T @ (self.Q @ self.xd - C_x0)
-        x_opt = C_x0 + self.D @ u_opt
+        C_x0 = self.Sw[:, :self.x_dim] @ x0
+        u_opt = self.l_side_invs[0] @ self.Su.T @ (self.Q @ self.xd - C_x0)
+        x_opt = C_x0 + self.Su @ u_opt
         return x_opt.reshape(self.N, -1), u_opt.reshape(self.N, -1)
 
     def solve_dp(self, Qr=None, Rr=None, ur=None, xr=None, return_Qs=False):
@@ -165,7 +165,7 @@ class SLS(SLSBase):
         else:
             return K, k
 
-    def solve_DP_ff(self, K, Quu, Qux, Quu_inv, Qr=None, Rr=None, ur=None, xr=None):
+    def solve_dp_ff(self, K, Quu, Qux, Quu_inv, Qr=None, Rr=None, ur=None, xr=None):
 
         k = np.zeros((self.N, self.u_dim))
 
@@ -213,22 +213,22 @@ class SLS(SLSBase):
         if type(self.Q) == sp.csc.csc_matrix:
             self.Q = self.Q.toarray()
 
-        DTQ = self.D.T @ self.Q
+        DTQ = self.Su.T @ self.Q
 
         if self.l_side_invs is None:
-            self.l_side_invs = self.compute_inverses(np.array(DTQ @ self.D + self.R))
+            self.l_side_invs = self.compute_inverses(np.array(DTQ @ self.Su + self.R))
 
         du = self.l_side_invs[0] @ DTQ @ self.xd
-        # self.dx = self.D @ self.du
+        # self.dx = self.Su @ self.du
 
         if verbose: print("Feedforward computed.")
-        r_side = - DTQ @ self.C
+        r_side = - DTQ @ self.Sw
         for i in range(self.N):
             if verbose: print("Computing feedback timestep ", i)
             phi_u = self.l_side_invs[i] @ r_side[i * self.u_dim:, i * self.x_dim:(i + 1) * self.x_dim]
             PHI_U[i * self.u_dim:, i * self.x_dim:(i + 1) * self.x_dim] = phi_u
 
-        # self.PHI_X = self.C + self.D @ self.PHI_U
+        # self.PHI_X = self.Sw + self.Su @ self.PHI_U
         if verbose: print("Feedback computed.")
         return PHI_U, du
 
@@ -236,13 +236,13 @@ class SLS(SLSBase):
         """
         Computes the feedback gains K and the feedforward control commands k.
         """
-        PHI_X = self.C + self.D @ PHI_U
+        PHI_X = self.Sw + self.Su @ PHI_U
         K = PHI_U @ np.linalg.inv(PHI_X)
-        k = (np.eye(self.D.shape[-1]) - K @ self.D) @ du
+        k = (np.eye(self.Su.shape[-1]) - K @ self.Su) @ du
         return K, k
 
     def initialize_replanning_procedure(self, K ):
-        self.replan_matrix = (np.eye(self.D.shape[-1]) - K @ self.D)@np.linalg.solve(self.D.T @ self.Q @ self.D + self.R, self.D.T @ self.Q)
+        self.replan_matrix = (np.eye(self.Su.shape[-1]) - K @ self.Su)@np.linalg.solve(self.Su.T @ self.Q @ self.Su + self.R, self.Su.T @ self.Q)
 
     def replan_feedforward(self, k, xd):
         return k + self.replan_matrix.dot(xd - self.xd)
@@ -250,7 +250,7 @@ class SLS(SLSBase):
 
     ######################################### Inequalities #########################################################
     def ADMM_LQT_Batch(self, x0, project_x=False, project_u=False, max_iter=20, rho_x=None, rho_u=None, alpha=1.,
-                       threshold=1e-3,  verbose=False, log=False):
+                       tol=1e-3,  verbose=False, log=False):
         """
         Solves LQT-ADMM in batch form.
         x0: initial state
@@ -259,11 +259,11 @@ class SLS(SLSBase):
         Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
 
         # Initialize some values
-        Su = self.D
+        Su = self.Su
         SuTQ = Su.T @ self.Q
         SuTQSu = SuTQ @ Su
         l_side = SuTQSu + self.R
-        Sx_x0 = self.C[:, :self.x_dim] @ x0
+        Sx_x0 = self.Sw[:, :self.x_dim] @ x0
         r_side = SuTQ.dot(self.xd - Sx_x0)
 
         z_u_init = np.linalg.solve(np.array(l_side), r_side)
@@ -290,33 +290,33 @@ class SLS(SLSBase):
 
         return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, project_x, project_u, alpha=alpha,
                     z_x_init=z_x_init, z_u_init=z_u_init,Qr=Qr, Rr=Rr,
-                        max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
+                        max_iter=max_iter, tol=tol, verbose=verbose, log=log)
 
 
 
 
     def ADMM_LQT_DP(self, x0, project_x=False, project_u=False, max_iter=2000, rho_x=None, rho_u=None,alpha=1.,
-                    threshold=1e-3, verbose=False, log=False):
+                    tol=1e-3, verbose=False, log=False):
         """
         Solves LQT-ADMM with dynamic programming.
         """
 
         Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=True)
-        K, _, Quu_log, Quu_inv_log, Qux_log = self.solve_DP(Rr=Rr, Qr=Qr,
+        K, _, Quu_log, Quu_inv_log, Qux_log = self.solve_dp(Rr=Rr, Qr=Qr,
                                                                  xr=np.zeros(self.N * self.x_dim),
                                                                  ur=np.zeros(self.N * self.u_dim), return_Qs=True)
 
         def f_argmin(x, u):
-            k = self.solve_DP_ff(K=K, Quu=Quu_log, Quu_inv=Quu_inv_log, Qux=Qux_log,
+            k = self.solve_dp_ff(K=K, Quu=Quu_log, Quu_inv=Quu_inv_log, Qux=Qux_log,
                                  Rr=Rr, Qr=Qr, xr=x, ur=u)
             x_nom, u_nom = self.get_trajectory_dp(x0, K, k)
             return x_nom.flatten(), u_nom.flatten(), K, k
         Qr_ = scipy.linalg.block_diag(*Qr) if Qr is not None else None
         Rr_ = scipy.linalg.block_diag(*Rr) if Rr is not None else None
         return ADMM(self.x_dim * self.N, self.u_dim * self.N, f_argmin, project_x=project_x, project_u=project_u, alpha=alpha,
-                       Qr=Qr_, Rr=Rr_,max_iter=max_iter, threshold=threshold, verbose=verbose, log=log)
+                       Qr=Qr_, Rr=Rr_,max_iter=max_iter, tol=tol, verbose=verbose, log=log)
 
-    def ADMM_SLS(self, project_x=False, project_u=False, max_iter=5000, rho_x=0., rho_u=0., alpha=1.,threshold=1e-3, verbose=False,log=False):
+    def ADMM_SLS(self, project_x=False, project_u=False, max_iter=5000, rho_x=0., rho_u=0., alpha=1.,tol=1e-3, verbose=False,log=False):
         """
         Solves system level synthesis problem with ADMM.
         Robustness of control commands being in bounds with respect to a initial position distribution only.
@@ -327,8 +327,8 @@ class SLS(SLSBase):
 
 
         # Initialize some values
-        Sx = self.C[:, :self.x_dim//2]
-        Su = self.D
+        Sx = self.Sw[:, :self.x_dim//2]
+        Su = self.Su
         Qr, Rr = self.compute_Rr_Qr(rho_x=rho_x, rho_u=rho_u, dp=False)
         Rr = scipy.sparse.csr_matrix(Rr)
         SuTQ = Su.T @ self.Q
@@ -418,7 +418,7 @@ class SLS(SLSBase):
                 prim_res_norm += + np.linalg.norm(Rr @ prim_res_u)
 
             logs += [np.array([prim_res_norm, dual_res_norm])]
-            if prim_res_norm < threshold and dual_res_norm < threshold:  # or np.abs(prim_res_norm-prim_res_norm_prev) < 1e-5:
+            if prim_res_norm < tol and dual_res_norm < tol:  # or np.abs(prim_res_norm-prim_res_norm_prev) < 1e-5:
                 if verbose:
                     print("ADMM converged at iteration ", j, "!")
                     print("ADMM residual is ", "{:.2e}".format(prim_res_norm), "{:.2e}".format(dual_res_norm))

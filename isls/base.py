@@ -59,7 +59,7 @@ class Base(object):
             if type(rho_x) == float or type(rho_x) == int:
                 Qr = np.tile(rho_x * np.eye(self.x_dim)[None], (self.N, 1, 1))
             elif rho_x.shape[0] == self.x_dim:
-                Qr = np.zeros((self.N, self.d, self.d))
+                Qr = np.zeros((self.N, self.x_dim, self.x_dim))
                 Qr[:] = rho_x
             else:
                 Qr = rho_x
@@ -111,9 +111,9 @@ class Base(object):
         self.A, self.B = value[0], value[1]
         for i in range(self.N - 1, 0, -1):
             A = self.A if self.A.ndim == 2 else self.A[i-1]
-            B = self.A if self.A.ndim == 2 else self.B[i-1]
-            self.D[i * self.x_dim:, (i - 1) * self.u_dim:i * self.u_dim] = \
-                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ B
+            B = self.B if self.B.ndim == 2 else self.B[i-1]
+            self.Su[i * self.x_dim:, (i - 1) * self.u_dim:i * self.u_dim] = \
+                self.Sw[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ B
 
-            self.C[i * self.x_dim:, (i - 1) * self.x_dim:i * self.x_dim] = \
-                self.C[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ A
+            self.Sw[i * self.x_dim:, (i - 1) * self.x_dim:i * self.x_dim] = \
+                self.Sw[i * self.x_dim:, i * self.x_dim:(i + 1) * self.x_dim] @ A

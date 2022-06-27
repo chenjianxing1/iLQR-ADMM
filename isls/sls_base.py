@@ -22,9 +22,6 @@ class SLSBase(Base):
         self.PHI_X = None
         self.l_side_invs = None
 
-
-
-
     def compute_cost(self, x, u=None, cost_function=None):
         if cost_function is None:
             if len(x.shape) == 3: # batch solutions
@@ -149,18 +146,4 @@ class SLSBase(Base):
         self.du = None
         self.dx = None
 
-
     ############################################### PLOTTING ################################################
-    def plot_phi_x(self):
-        fig, ax = plt.subplots(ncols=2, figsize=(10, 5), sharey=True, sharex=True)
-        resultant = np.array([np.abs(self.PHI_X), np.abs(self.PHI_X2)])
-        min_val, max_val = np.amin(resultant), np.amax(resultant)
-        ax[0].imshow(np.abs(self.PHI_X), vmin=min_val, vmax=max_val)
-        ax[1].imshow(np.abs(self.PHI_X2), vmin=min_val, vmax=max_val)
-
-    def plot_phi_u(self):
-        fig, ax = plt.subplots(ncols=2, figsize=(10, 5), sharey=True, sharex=True)
-        resultant = np.array([np.abs(self.PHI_U), np.abs(self.PHI_U2)])
-        min_val, max_val = np.amin(resultant), np.amax(resultant)
-        ax[0].imshow(np.abs(self.PHI_U), vmin=min_val, vmax=max_val)
-        ax[1].imshow(np.abs(self.PHI_U2), vmin=min_val, vmax=max_val)
